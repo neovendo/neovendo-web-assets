@@ -153,6 +153,58 @@ function getAllJobItems() {
   return Array.from(document.querySelectorAll(".job-item"));
 }
 
+function getCategorySelect() {
+  return document.getElementById("tag-select");
+}
+
+function collectJobCategories() {
+  const categories = new Map();
+
+  getAllJobItems().forEach((row) => {
+    [row.dataset.category1, row.dataset.category2].forEach((value) => {
+      const label = (value || "").trim();
+      const key = normalizeText(label);
+
+      if (!label || !key || categories.has(key)) return;
+      categories.set(key, label);
+    });
+  });
+
+  return Array.from(categories.values()).sort((a, b) =>
+    a.localeCompare(b, "de", { sensitivity: "base" })
+  );
+}
+
+function populateCategorySelect() {
+  const select = getCategorySelect();
+  if (!select) return;
+
+  const categories = collectJobCategories();
+  const currentValue = select.value;
+  const firstOption = select.options[0];
+  const defaultLabel = firstOption?.textContent?.trim() || "Alle Kategorien";
+  const defaultValue = firstOption ? firstOption.value : "";
+
+  select.innerHTML = "";
+
+  const defaultOption = document.createElement("option");
+  defaultOption.value = defaultValue;
+  defaultOption.textContent = defaultLabel;
+  select.appendChild(defaultOption);
+
+  categories.forEach((category) => {
+    const option = document.createElement("option");
+    option.value = category;
+    option.textContent = category;
+    select.appendChild(option);
+  });
+
+  const hasCurrentValue = Array.from(select.options).some(
+    (option) => option.value === currentValue
+  );
+  select.value = hasCurrentValue ? currentValue : defaultValue;
+}
+
 function updateCountElements() {
   const totalCount = getAllJobItems().length;
   const filteredCount = filteredItems.length;
@@ -193,6 +245,15 @@ function matchesJobFilter(row, searchTerm) {
   return searchableText.includes(searchTerm);
 }
 
+function matchesCategoryFilter(row, category) {
+  if (!category) return true;
+
+  const rowCategory1 = normalizeText(row.dataset.category1 || "");
+  const rowCategory2 = normalizeText(row.dataset.category2 || "");
+
+  return rowCategory1 === category || rowCategory2 === category;
+}
+
 function matchesEmploymentTypeFilter(row, employmentType) {
   if (!employmentType) return true;
 
@@ -227,8 +288,9 @@ function matchesRadiusFilter(row, centerLat, centerLon, radius) {
   return getDistance(centerLat, centerLon, lat, lon) <= radius;
 }
 
-function itemMatches(row, jobTerm, radius, employmentType) {
+function itemMatches(row, jobTerm, selectedCategory, radius, employmentType) {
   const jobMatch = matchesJobFilter(row, jobTerm);
+  const categoryMatch = matchesCategoryFilter(row, selectedCategory);
   const employmentTypeMatch = matchesEmploymentTypeFilter(row, employmentType);
 
   let locationMatch = true;
@@ -245,12 +307,13 @@ function itemMatches(row, jobTerm, radius, employmentType) {
     locationMatch = matchesSelectedLocation(row, selectedLocation);
   }
 
-  return jobMatch && employmentTypeMatch && locationMatch && radiusMatch;
+  return jobMatch && categoryMatch && employmentTypeMatch && locationMatch && radiusMatch;
 }
 
 function hasAnyActiveFilter() {
   const jobTerm = normalizeText(document.getElementById("job-search")?.value || "");
   const locationValue = normalizeText(document.getElementById("location-input")?.value || "");
+  const selectedCategory = normalizeText(getCategorySelect()?.value || "");
   const employmentType = normalizeText(
     document.getElementById("employment-type-select")?.value || ""
   );
@@ -262,6 +325,7 @@ function hasAnyActiveFilter() {
   return Boolean(
     jobTerm ||
     locationValue ||
+    selectedCategory ||
     employmentType ||
     (!Number.isNaN(radius) && radius > 0) ||
     selectedLocation
@@ -271,6 +335,7 @@ function hasAnyActiveFilter() {
 function filterItems() {
   const items = getAllJobItems();
   const jobTerm = normalizeText(document.getElementById("job-search")?.value || "");
+  const selectedCategory = normalizeText(getCategorySelect()?.value || "");
   const employmentType = normalizeText(
     document.getElementById("employment-type-select")?.value || ""
   );
@@ -280,7 +345,7 @@ function filterItems() {
   );
 
   filteredItems = items.filter((row) =>
-    itemMatches(row, jobTerm, radius, employmentType)
+    itemMatches(row, jobTerm, selectedCategory, radius, employmentType)
   );
 
   hasActiveMapFilter = hasAnyActiveFilter();
@@ -548,6 +613,7 @@ function applyInitialQueryParams() {
 function resetFilter() {
   const jobSearch = document.getElementById("job-search");
   const locationInput = document.getElementById("location-input");
+  const categorySelect = getCategorySelect();
   const employmentTypeSelect = document.getElementById("employment-type-select");
   const radiusSelect = document.getElementById("radius-select");
 
@@ -555,6 +621,7 @@ function resetFilter() {
 
   if (jobSearch) jobSearch.value = "";
   if (locationInput) locationInput.value = "";
+  if (categorySelect) categorySelect.value = categorySelect.options[0]?.value || "";
   if (employmentTypeSelect) employmentTypeSelect.value = "";
   if (radiusSelect) radiusSelect.value = "";
   closeLocationSuggestions();
@@ -678,6 +745,7 @@ function observeJobListChanges() {
 
     jobsMapRenderFrame = window.requestAnimationFrame(() => {
       jobsMapRenderFrame = null;
+      populateCategorySelect();
       scheduleFilterRun(false);
     });
   });
@@ -1001,10 +1069,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const jobSearch = document.getElementById("job-search");
   const locationInput = document.getElementById("location-input");
+  const categorySelect = getCategorySelect();
   const employmentTypeSelect = document.getElementById("employment-type-select");
   const radiusSelect = document.getElementById("radius-select");
   const resetBtn = document.getElementById("btn-reset");
   const loadMoreBtn = document.getElementById("load-more-btn");
+
+  populateCategorySelect();
 
   if (jobSearch) {
     jobSearch.addEventListener("input", () => {
@@ -1039,6 +1110,12 @@ document.addEventListener("DOMContentLoaded", () => {
         closeLocationSuggestions();
         scheduleFilterRun(true);
       }, 120);
+    });
+  }
+
+  if (categorySelect) {
+    categorySelect.addEventListener("change", () => {
+      scheduleFilterRun(true);
     });
   }
 
@@ -1079,8 +1156,14 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   window.setTimeout(bootJobsMap, 150);
   window.setTimeout(bootJobsMap, 500);
-  window.setTimeout(() => scheduleFilterRun(true), 150);
-  window.setTimeout(() => scheduleFilterRun(true), 500);
+  window.setTimeout(() => {
+    populateCategorySelect();
+    scheduleFilterRun(true);
+  }, 150);
+  window.setTimeout(() => {
+    populateCategorySelect();
+    scheduleFilterRun(true);
+  }, 500);
   window.addEventListener("resize", () => {
     if (!jobsMapInitialized || !jobsMap) return;
 
