@@ -244,7 +244,9 @@ function getBranchFilterState() {
 
   const selectedBranches = branchCheckboxes
     .filter((checkbox) => checkbox.checked)
-    .map((checkbox) => normalizeText(checkbox.value || checkbox.dataset.branchFilterValue || ""))
+    .map((checkbox) =>
+      normalizeText(checkbox.dataset.branchFilterValue || checkbox.value || "")
+    )
     .filter(Boolean);
 
   return {
