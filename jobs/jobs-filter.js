@@ -314,6 +314,20 @@ function getSelectedBranchLabels() {
     .filter(Boolean);
 }
 
+function setCheckboxChecked(checkbox, isChecked) {
+  if (!(checkbox instanceof HTMLInputElement)) return;
+
+  checkbox.checked = isChecked;
+
+  const label = checkbox.closest(".w-checkbox, .w-radio, label");
+  const visual = label?.querySelector(".w-checkbox-input");
+
+  if (visual) {
+    visual.classList.toggle("w--redirected-checked", isChecked);
+    visual.setAttribute("aria-checked", isChecked ? "true" : "false");
+  }
+}
+
 function setSelectedBranchLabels(branchLabels) {
   const normalizedLabels = new Set(branchLabels.map((value) => normalizeText(value)).filter(Boolean));
   const branchCheckboxes = getBranchCheckboxes();
@@ -324,11 +338,11 @@ function setSelectedBranchLabels(branchLabels) {
 
   branchCheckboxes.forEach((checkbox) => {
     const label = normalizeText(checkbox.dataset.branchFilterValue || checkbox.value || "");
-    checkbox.checked = normalizedLabels.has(label);
+    setCheckboxChecked(checkbox, normalizedLabels.has(label));
   });
 
   if (allCheckbox) {
-    allCheckbox.checked = normalizedLabels.size === 0;
+    setCheckboxChecked(allCheckbox, normalizedLabels.size === 0);
   }
 
   syncBranchFilterState();
@@ -355,7 +369,7 @@ function syncBranchFilterState(changedInput = null) {
   if (changedInput === allCheckbox && allCheckbox) {
     if (allCheckbox.checked) {
       branchCheckboxes.forEach((checkbox) => {
-        checkbox.checked = false;
+        setCheckboxChecked(checkbox, false);
       });
     }
     return;
@@ -364,12 +378,12 @@ function syncBranchFilterState(changedInput = null) {
   const checkedBranchCount = branchCheckboxes.filter((checkbox) => checkbox.checked).length;
 
   if (checkedBranchCount > 0 && allCheckbox) {
-    allCheckbox.checked = false;
+    setCheckboxChecked(allCheckbox, false);
     return;
   }
 
   if (allCheckbox) {
-    allCheckbox.checked = true;
+    setCheckboxChecked(allCheckbox, true);
   }
 }
 
@@ -916,11 +930,11 @@ function resetFilter() {
     );
 
     branchCheckboxes.forEach((checkbox) => {
-      checkbox.checked = false;
+      setCheckboxChecked(checkbox, false);
     });
 
     if (allCheckbox) {
-      allCheckbox.checked = true;
+      setCheckboxChecked(allCheckbox, true);
     }
   }
   if (employmentTypeSelect) employmentTypeSelect.value = "";
