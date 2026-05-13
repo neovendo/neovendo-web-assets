@@ -1,4 +1,3 @@
-const csvUrl = "https://raw.githubusercontent.com/neovendo/neovendo/refs/heads/main/PLZ_STREETCODE_GEO.csv";
 const VISIBLE_STEP = 20;
 const LEAFLET_JS_URL = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
 const LEAFLET_CSS_URL = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
@@ -35,6 +34,7 @@ let jobsListObserver = null;
 let currentLocationSuggestions = [];
 let highlightedSuggestionIndex = -1;
 let filterDebounceTimeout = null;
+let plzDataPromise = null;
 
 let jobsMap = null;
 let jobsMapMarkersLayer = null;
@@ -112,44 +112,85 @@ function debugLog(label, payload) {
 }
 
 async function loadPLZData() {
-  try {
-    const res = await fetch(csvUrl);
-    const text = await res.text();
+  if (plzList.length) return plzList;
+  if (plzDataPromise) return plzDataPromise;
 
-    plzList = text
-      .split("\n")
-      .map((line) => line.replace(/"/g, "").trim())
-      .filter(Boolean)
-      .map((line) => {
-        const parts = line.split(";");
-        if (parts.length < 6) return null;
+  const jsonUrl = getPlzDataUrl();
 
-        const plz = parts[0].trim().padStart(5, "0");
-        const city = parts[1].trim();
-        const suburb = (parts[2] || "").trim();
-        const displayName = (parts[3] || "").trim() || [city, suburb].filter(Boolean).join("-");
-        const lon = parseFloat(parts[4]);
-        const lat = parseFloat(parts[5]);
-        const state = (parts[6] || "").trim();
-
-        if (Number.isNaN(lat) || Number.isNaN(lon)) return null;
-
-        return {
-          plz,
-          ort: displayName || city,
-          city,
-          suburb,
-          displayName: displayName || city,
-          state,
-          lat,
-          lon,
-        };
-      })
-      .filter(Boolean);
-  } catch (error) {
-    console.error("[jobs-filter] CSV load failed", error);
+  if (!jsonUrl) {
     plzList = [];
+    return plzList;
   }
+
+  plzDataPromise = (async () => {
+    try {
+      const res = await fetch(jsonUrl);
+      if (!res.ok) {
+        throw new Error(`PLZ data request failed with status ${res.status}`);
+      }
+
+      const data = await res.json();
+      if (!Array.isArray(data)) {
+        throw new Error("PLZ data is not an array");
+      }
+
+      plzList = data
+        .map((item) => {
+          const plz = String(item.plz || "").trim().padStart(5, "0");
+          const ort = String(item.ort || "").trim();
+          const lat = parseFloat(item.lat);
+          const lon = parseFloat(item.lon);
+
+          if (!plz || !ort || Number.isNaN(lat) || Number.isNaN(lon)) return null;
+
+          return {
+            plz,
+            ort,
+            lat,
+            lon,
+          };
+        })
+        .filter(Boolean);
+    } catch (error) {
+      console.error("[jobs-filter] PLZ JSON load failed", error);
+      plzList = [];
+    }
+
+    return plzList;
+  })();
+
+  return plzDataPromise;
+}
+
+function getPlzDataUrl() {
+  const currentScript = Array.from(document.scripts).find((script) =>
+    (script.src || "").includes("jobs-filter.js")
+  );
+
+  const scriptSrc = currentScript?.src || "";
+  if (!scriptSrc) return "";
+
+  try {
+    const url = new URL(scriptSrc, window.location.href);
+    return url.href.replace(/jobs-filter\.js(?:\?.*)?$/, "data/plz-data.json");
+  } catch (error) {
+    console.error("[jobs-filter] Could not resolve PLZ data URL", error);
+    return "";
+  }
+}
+
+function shouldPreloadPlzData() {
+  const { location, radius } = getQueryParams();
+  return Boolean(location || radius);
+}
+
+function ensurePLZDataLoaded() {
+  return loadPLZData();
+}
+
+async function ensurePLZDataForLocationInteraction() {
+  if (plzList.length) return plzList;
+  return ensurePLZDataLoaded();
 }
 
 function normalizeText(str) {
@@ -720,9 +761,6 @@ function findExactLocationMatch(value) {
     const exactByPlzAndText = postcodeMatches.find((item) => {
       return [
         item.ort,
-        item.city,
-        item.suburb,
-        item.displayName,
         `${item.plz} ${item.ort}`,
         `${item.plz} - ${item.ort}`,
         `${item.plz} – ${item.ort}`,
@@ -739,9 +777,6 @@ function findExactLocationMatch(value) {
       return (
         [
           item.ort,
-          item.city,
-          item.suburb,
-          item.displayName,
           `${item.plz} ${item.ort}`,
           `${item.plz} - ${item.ort}`,
           `${item.plz} – ${item.ort}`,
@@ -758,7 +793,7 @@ function getSuggestionLabel(item) {
 function dedupeLocationSuggestions(items) {
   const seen = new Set();
   return items.filter((item) => {
-    const key = normalizeText(`${item.plz}|${item.ort}|${item.city}|${item.suburb}`);
+    const key = normalizeText(`${item.plz}|${item.ort}`);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -835,9 +870,6 @@ function showLocationSuggestions(value) {
     .filter((item) => {
       const searchableValues = [
         item.ort,
-        item.city,
-        item.suburb,
-        item.displayName,
         `${item.plz} ${item.ort}`,
         `${item.plz} - ${item.ort}`,
         `${item.plz} – ${item.ort}`,
@@ -957,25 +989,29 @@ function useGPSFallback() {
     return;
   }
 
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      const nearest = findNearestPLZ(pos.coords.latitude, pos.coords.longitude);
+  ensurePLZDataForLocationInteraction().then(() => {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const nearest = findNearestPLZ(pos.coords.latitude, pos.coords.longitude);
 
-      if (nearest) {
-        selectedLocation = nearest;
+        if (nearest) {
+          selectedLocation = nearest;
 
-        const locationInput = getLocationInput();
-        if (locationInput) {
-          locationInput.value = getSuggestionLabel(nearest);
+          const locationInput = getLocationInput();
+          if (locationInput) {
+            locationInput.value = getSuggestionLabel(nearest);
+          }
         }
-      }
 
+        runFilters(true);
+      },
+      () => {
+        runFilters(true);
+      }
+    );
+  }).catch(() => {
       runFilters(true);
-    },
-    () => {
-      runFilters(true);
-    }
-  );
+  });
 }
 
 function autoRunFilter() {
@@ -992,15 +1028,19 @@ function autoRunFilter() {
 function handleLocationInputKeydown(event) {
   const input = event.currentTarget;
   if (!currentLocationSuggestions.length && input?.value?.trim()) {
-    showLocationSuggestions(input.value.trim());
+    ensurePLZDataForLocationInteraction().then(() => {
+      showLocationSuggestions(input.value.trim());
+    });
   }
   if (!currentLocationSuggestions.length) {
     if (event.key === "Enter") {
-      const exactMatch = findExactLocationMatch(input?.value?.trim() || "");
-      if (exactMatch) {
-        event.preventDefault();
-        selectLocation(exactMatch);
-      }
+      ensurePLZDataForLocationInteraction().then(() => {
+        const exactMatch = findExactLocationMatch(input?.value?.trim() || "");
+        if (exactMatch) {
+          event.preventDefault();
+          selectLocation(exactMatch);
+        }
+      });
     }
     return;
   }
@@ -1398,29 +1438,35 @@ document.addEventListener("DOMContentLoaded", () => {
   if (locationInput) {
     locationInput.addEventListener("input", () => {
       selectedLocation = null;
-      showLocationSuggestions(locationInput.value.trim());
+      ensurePLZDataForLocationInteraction().then(() => {
+        showLocationSuggestions(locationInput.value.trim());
+      });
       scheduleFilterRun(true);
     });
 
     locationInput.addEventListener("focus", () => {
-      showLocationSuggestions(locationInput.value.trim());
+      ensurePLZDataForLocationInteraction().then(() => {
+        showLocationSuggestions(locationInput.value.trim());
+      });
     });
 
     locationInput.addEventListener("keydown", handleLocationInputKeydown);
 
     locationInput.addEventListener("blur", () => {
       window.setTimeout(() => {
-        const match = findExactLocationMatch(locationInput.value.trim());
+        ensurePLZDataForLocationInteraction().then(() => {
+          const match = findExactLocationMatch(locationInput.value.trim());
 
-        if (match) {
-          selectedLocation = match;
-          locationInput.value = getSuggestionLabel(match);
-        } else if (!locationInput.value.trim()) {
-          selectedLocation = null;
-        }
+          if (match) {
+            selectedLocation = match;
+            locationInput.value = getSuggestionLabel(match);
+          } else if (!locationInput.value.trim()) {
+            selectedLocation = null;
+          }
 
-        closeLocationSuggestions();
-        scheduleFilterRun(true);
+          closeLocationSuggestions();
+          scheduleFilterRun(true);
+        });
       }, 120);
     });
   }
@@ -1470,11 +1516,15 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  runFilters(true);
-  loadPLZData().then(() => {
+  if (shouldPreloadPlzData()) {
+    loadPLZData().then(() => {
+      applyInitialQueryParams();
+      runFilters(true);
+    });
+  } else {
     applyInitialQueryParams();
     runFilters(true);
-  });
+  }
   window.setTimeout(bootJobsMap, 150);
   window.setTimeout(bootJobsMap, 500);
   window.setTimeout(() => {
