@@ -157,6 +157,13 @@ function getCategorySelect() {
   return document.getElementById("tag-select");
 }
 
+function getBranchFilterContainer() {
+  return (
+    document.getElementById("niederlassung-filter") ||
+    document.getElementById("branch-filter")
+  );
+}
+
 function collectJobCategories() {
   const categories = new Map();
 
@@ -171,6 +178,22 @@ function collectJobCategories() {
   });
 
   return Array.from(categories.values()).sort((a, b) =>
+    a.localeCompare(b, "de", { sensitivity: "base" })
+  );
+}
+
+function collectJobBranches() {
+  const branches = new Map();
+
+  getAllJobItems().forEach((row) => {
+    const label = (row.dataset.niederlassung || "").trim();
+    const key = normalizeText(label);
+
+    if (!label || !key || branches.has(key)) return;
+    branches.set(key, label);
+  });
+
+  return Array.from(branches.values()).sort((a, b) =>
     a.localeCompare(b, "de", { sensitivity: "base" })
   );
 }
@@ -203,6 +226,118 @@ function populateCategorySelect() {
     (option) => option.value === currentValue
   );
   select.value = hasCurrentValue ? currentValue : defaultValue;
+}
+
+function getBranchFilterState() {
+  const container = getBranchFilterContainer();
+  if (!container) {
+    return {
+      allChecked: true,
+      selectedBranches: [],
+    };
+  }
+
+  const allCheckbox = container.querySelector('[data-branch-filter-all]');
+  const branchCheckboxes = Array.from(
+    container.querySelectorAll('input[type="checkbox"][data-branch-filter-value]')
+  );
+
+  const selectedBranches = branchCheckboxes
+    .filter((checkbox) => checkbox.checked)
+    .map((checkbox) => normalizeText(checkbox.value || checkbox.dataset.branchFilterValue || ""))
+    .filter(Boolean);
+
+  return {
+    allChecked: Boolean(allCheckbox?.checked),
+    selectedBranches,
+  };
+}
+
+function hasCustomBranchCheckboxes(container) {
+  if (!container) return false;
+
+  return Boolean(
+    container.querySelector('[data-branch-filter-all]') ||
+    container.querySelector('[data-branch-filter-value]')
+  );
+}
+
+function syncBranchFilterState(changedInput = null) {
+  const container = getBranchFilterContainer();
+  if (!container) return;
+
+  const allCheckbox = container.querySelector('[data-branch-filter-all]');
+  const branchCheckboxes = Array.from(
+    container.querySelectorAll('input[type="checkbox"][data-branch-filter-value]')
+  );
+
+  if (changedInput === allCheckbox && allCheckbox) {
+    if (allCheckbox.checked) {
+      branchCheckboxes.forEach((checkbox) => {
+        checkbox.checked = false;
+      });
+    }
+    return;
+  }
+
+  const checkedBranchCount = branchCheckboxes.filter((checkbox) => checkbox.checked).length;
+
+  if (checkedBranchCount > 0 && allCheckbox) {
+    allCheckbox.checked = false;
+    return;
+  }
+
+  if (allCheckbox) {
+    allCheckbox.checked = true;
+  }
+}
+
+function populateBranchCheckboxes() {
+  const container = getBranchFilterContainer();
+  if (!container) return;
+
+  if (hasCustomBranchCheckboxes(container)) {
+    syncBranchFilterState();
+    return;
+  }
+
+  const branches = collectJobBranches();
+  const { allChecked, selectedBranches } = getBranchFilterState();
+  const allLabel = container.dataset.allLabel?.trim() || "Alle Niederlassungen";
+
+  container.innerHTML = "";
+
+  const allWrapper = document.createElement("label");
+  const allCheckbox = document.createElement("input");
+  const allText = document.createElement("span");
+
+  allCheckbox.type = "checkbox";
+  allCheckbox.value = "";
+  allCheckbox.checked = allChecked || selectedBranches.length === 0;
+  allCheckbox.setAttribute("data-branch-filter-all", "true");
+  allText.textContent = allLabel;
+
+  allWrapper.appendChild(allCheckbox);
+  allWrapper.appendChild(allText);
+  container.appendChild(allWrapper);
+
+  branches.forEach((branch) => {
+    const wrapper = document.createElement("label");
+    const checkbox = document.createElement("input");
+    const text = document.createElement("span");
+
+    checkbox.type = "checkbox";
+    checkbox.value = branch;
+    checkbox.checked = selectedBranches.includes(normalizeText(branch));
+    checkbox.setAttribute("data-branch-filter-value", branch);
+    text.textContent = branch;
+
+    wrapper.appendChild(checkbox);
+    wrapper.appendChild(text);
+    container.appendChild(wrapper);
+  });
+
+  syncBranchFilterState();
 }
 
 function updateCountElements() {
@@ -261,6 +396,13 @@ function matchesEmploymentTypeFilter(row, employmentType) {
   return rowEmploymentType === employmentType;
 }
 
+function matchesBranchFilter(row, selectedBranches) {
+  if (!selectedBranches.length) return true;
+
+  const rowBranch = normalizeText(row.dataset.niederlassung || "");
+  return selectedBranches.includes(rowBranch);
+}
+
 function matchesSelectedLocation(row, location) {
   if (!location) return true;
 
@@ -288,10 +430,11 @@ function matchesRadiusFilter(row, centerLat, centerLon, radius) {
   return getDistance(centerLat, centerLon, lat, lon) <= radius;
 }
 
-function itemMatches(row, jobTerm, selectedCategory, radius, employmentType) {
+function itemMatches(row, jobTerm, selectedCategory, radius, employmentType, selectedBranches) {
   const jobMatch = matchesJobFilter(row, jobTerm);
   const categoryMatch = matchesCategoryFilter(row, selectedCategory);
   const employmentTypeMatch = matchesEmploymentTypeFilter(row, employmentType);
+  const branchMatch = matchesBranchFilter(row, selectedBranches);
 
   let locationMatch = true;
   let radiusMatch = true;
@@ -307,13 +450,21 @@ function itemMatches(row, jobTerm, selectedCategory, radius, employmentType) {
     locationMatch = matchesSelectedLocation(row, selectedLocation);
   }
 
-  return jobMatch && categoryMatch && employmentTypeMatch && locationMatch && radiusMatch;
+  return (
+    jobMatch &&
+    categoryMatch &&
+    employmentTypeMatch &&
+    branchMatch &&
+    locationMatch &&
+    radiusMatch
+  );
 }
 
 function hasAnyActiveFilter() {
   const jobTerm = normalizeText(document.getElementById("job-search")?.value || "");
   const locationValue = normalizeText(document.getElementById("location-input")?.value || "");
   const selectedCategory = normalizeText(getCategorySelect()?.value || "");
+  const { selectedBranches } = getBranchFilterState();
   const employmentType = normalizeText(
     document.getElementById("employment-type-select")?.value || ""
   );
@@ -326,6 +477,7 @@ function hasAnyActiveFilter() {
     jobTerm ||
     locationValue ||
     selectedCategory ||
+    selectedBranches.length ||
     employmentType ||
     (!Number.isNaN(radius) && radius > 0) ||
     selectedLocation
@@ -336,6 +488,7 @@ function filterItems() {
   const items = getAllJobItems();
   const jobTerm = normalizeText(document.getElementById("job-search")?.value || "");
   const selectedCategory = normalizeText(getCategorySelect()?.value || "");
+  const { selectedBranches } = getBranchFilterState();
   const employmentType = normalizeText(
     document.getElementById("employment-type-select")?.value || ""
   );
@@ -345,7 +498,14 @@ function filterItems() {
   );
 
   filteredItems = items.filter((row) =>
-    itemMatches(row, jobTerm, selectedCategory, radius, employmentType)
+    itemMatches(
+      row,
+      jobTerm,
+      selectedCategory,
+      radius,
+      employmentType,
+      selectedBranches
+    )
   );
 
   hasActiveMapFilter = hasAnyActiveFilter();
@@ -614,6 +774,7 @@ function resetFilter() {
   const jobSearch = document.getElementById("job-search");
   const locationInput = document.getElementById("location-input");
   const categorySelect = getCategorySelect();
+  const branchFilterContainer = getBranchFilterContainer();
   const employmentTypeSelect = document.getElementById("employment-type-select");
   const radiusSelect = document.getElementById("radius-select");
 
@@ -622,6 +783,20 @@ function resetFilter() {
   if (jobSearch) jobSearch.value = "";
   if (locationInput) locationInput.value = "";
   if (categorySelect) categorySelect.value = categorySelect.options[0]?.value || "";
+  if (branchFilterContainer) {
+    const allCheckbox = branchFilterContainer.querySelector('[data-branch-filter-all]');
+    const branchCheckboxes = branchFilterContainer.querySelectorAll(
+      'input[type="checkbox"][data-branch-filter-value]'
+    );
+
+    branchCheckboxes.forEach((checkbox) => {
+      checkbox.checked = false;
+    });
+
+    if (allCheckbox) {
+      allCheckbox.checked = true;
+    }
+  }
   if (employmentTypeSelect) employmentTypeSelect.value = "";
   if (radiusSelect) radiusSelect.value = "";
   closeLocationSuggestions();
@@ -746,6 +921,7 @@ function observeJobListChanges() {
     jobsMapRenderFrame = window.requestAnimationFrame(() => {
       jobsMapRenderFrame = null;
       populateCategorySelect();
+      populateBranchCheckboxes();
       scheduleFilterRun(false);
     });
   });
@@ -1070,12 +1246,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const jobSearch = document.getElementById("job-search");
   const locationInput = document.getElementById("location-input");
   const categorySelect = getCategorySelect();
+  const branchFilterContainer = getBranchFilterContainer();
   const employmentTypeSelect = document.getElementById("employment-type-select");
   const radiusSelect = document.getElementById("radius-select");
   const resetBtn = document.getElementById("btn-reset");
   const loadMoreBtn = document.getElementById("load-more-btn");
 
   populateCategorySelect();
+  populateBranchCheckboxes();
 
   if (jobSearch) {
     jobSearch.addEventListener("input", () => {
@@ -1119,6 +1297,15 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  if (branchFilterContainer) {
+    branchFilterContainer.addEventListener("change", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement) || target.type !== "checkbox") return;
+      syncBranchFilterState(target);
+      scheduleFilterRun(true);
+    });
+  }
+
   if (employmentTypeSelect) {
     employmentTypeSelect.addEventListener("change", () => {
       scheduleFilterRun(true);
@@ -1158,6 +1345,7 @@ document.addEventListener("DOMContentLoaded", () => {
   window.setTimeout(bootJobsMap, 500);
   window.setTimeout(() => {
     populateCategorySelect();
+    populateBranchCheckboxes();
     scheduleFilterRun(true);
   }, 150);
   window.setTimeout(() => {
