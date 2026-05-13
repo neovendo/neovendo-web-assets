@@ -9,6 +9,23 @@ const JOBS_MAP_TILE_ATTRIBUTION = "&copy; OpenStreetMap contributors &copy; CART
 const MOBILE_MARKER_INITIAL_LIMIT = 20;
 const MOBILE_MARKER_POST_INTERACTION_LIMIT = 100;
 const FILTER_INPUT_DEBOUNCE_MS = 150;
+const FILTER_URL_PARAMS = {
+  job: "job",
+  location: "location",
+  radius: "radius",
+  category: "category",
+  employmentType: "employmentType",
+  branch: "niederlassung",
+};
+const FILTER_SELECTORS = {
+  jobSearch: "#job-search",
+  locationInput: "#location-input",
+  radiusSelect: "#radius-select",
+  categorySelect: "#tag-select",
+  employmentTypeSelect: "#employment-type-select",
+  branchFilterContainer: "#niederlassung-filter, #branch-filter",
+};
+const DEBUG_ENABLED = Boolean(window.jobsFilterDebug);
 
 let plzList = [];
 let selectedLocation = null;
@@ -30,6 +47,7 @@ let jobsMapRenderFrame = null;
 let jobsMapInteractionFrame = null;
 let jobsMapHasUserInteracted = false;
 let jobsMapSuppressInteractionEvents = false;
+let hasInitializedFilterState = false;
 
 function getJobsListContainer() {
   return (
@@ -72,13 +90,25 @@ function updateEmptyState() {
 
 function getQueryParams() {
   const params = new URLSearchParams(window.location.search);
+  const branches = params
+    .getAll(FILTER_URL_PARAMS.branch)
+    .flatMap((value) => value.split(","))
+    .map((value) => value.trim())
+    .filter(Boolean);
 
   return {
-    job: (params.get("job") || "").trim(),
-    location: (params.get("location") || "").trim(),
-    radius: (params.get("radius") || "").trim(),
-    employmentType: (params.get("employmentType") || "").trim(),
+    job: (params.get(FILTER_URL_PARAMS.job) || "").trim(),
+    location: (params.get(FILTER_URL_PARAMS.location) || "").trim(),
+    radius: (params.get(FILTER_URL_PARAMS.radius) || "").trim(),
+    category: (params.get(FILTER_URL_PARAMS.category) || "").trim(),
+    employmentType: (params.get(FILTER_URL_PARAMS.employmentType) || "").trim(),
+    branches,
   };
+}
+
+function debugLog(label, payload) {
+  if (!DEBUG_ENABLED) return;
+  console.log(`[jobs-filter] ${label}`, payload);
 }
 
 async function loadPLZData() {
@@ -154,14 +184,27 @@ function getAllJobItems() {
 }
 
 function getCategorySelect() {
-  return document.getElementById("tag-select");
+  return document.querySelector(FILTER_SELECTORS.categorySelect);
 }
 
 function getBranchFilterContainer() {
-  return (
-    document.getElementById("niederlassung-filter") ||
-    document.getElementById("branch-filter")
-  );
+  return document.querySelector(FILTER_SELECTORS.branchFilterContainer);
+}
+
+function getJobSearchInput() {
+  return document.querySelector(FILTER_SELECTORS.jobSearch);
+}
+
+function getLocationInput() {
+  return document.querySelector(FILTER_SELECTORS.locationInput);
+}
+
+function getRadiusSelect() {
+  return document.querySelector(FILTER_SELECTORS.radiusSelect);
+}
+
+function getEmploymentTypeSelect() {
+  return document.querySelector(FILTER_SELECTORS.employmentTypeSelect);
 }
 
 function collectJobCategories() {
@@ -255,6 +298,42 @@ function getBranchFilterState() {
   };
 }
 
+function getBranchCheckboxes() {
+  const container = getBranchFilterContainer();
+  if (!container) return [];
+
+  return Array.from(
+    container.querySelectorAll('input[type="checkbox"][data-branch-filter-value]')
+  );
+}
+
+function getSelectedBranchLabels() {
+  return getBranchCheckboxes()
+    .filter((checkbox) => checkbox.checked)
+    .map((checkbox) => (checkbox.dataset.branchFilterValue || checkbox.value || "").trim())
+    .filter(Boolean);
+}
+
+function setSelectedBranchLabels(branchLabels) {
+  const normalizedLabels = new Set(branchLabels.map((value) => normalizeText(value)).filter(Boolean));
+  const branchCheckboxes = getBranchCheckboxes();
+  const container = getBranchFilterContainer();
+  if (!container) return;
+
+  const allCheckbox = container.querySelector('[data-branch-filter-all]');
+
+  branchCheckboxes.forEach((checkbox) => {
+    const label = normalizeText(checkbox.dataset.branchFilterValue || checkbox.value || "");
+    checkbox.checked = normalizedLabels.has(label);
+  });
+
+  if (allCheckbox) {
+    allCheckbox.checked = normalizedLabels.size === 0;
+  }
+
+  syncBranchFilterState();
+}
+
 function hasCustomBranchCheckboxes(container) {
   if (!container) return false;
 
@@ -340,6 +419,45 @@ function populateBranchCheckboxes() {
   });
 
   syncBranchFilterState();
+}
+
+function getCurrentFilterState() {
+  return {
+    job: (getJobSearchInput()?.value || "").trim(),
+    location: (getLocationInput()?.value || "").trim(),
+    radius: (getRadiusSelect()?.value || "").trim(),
+    category: (getCategorySelect()?.value || "").trim(),
+    employmentType: (getEmploymentTypeSelect()?.value || "").trim(),
+    branches: getSelectedBranchLabels(),
+  };
+}
+
+function updateFilterUrl() {
+  if (!hasInitializedFilterState) return;
+
+  const state = getCurrentFilterState();
+  const params = new URLSearchParams();
+
+  if (state.job) params.set(FILTER_URL_PARAMS.job, state.job);
+  if (state.location) params.set(FILTER_URL_PARAMS.location, state.location);
+  if (state.radius) params.set(FILTER_URL_PARAMS.radius, state.radius);
+  if (state.category) params.set(FILTER_URL_PARAMS.category, state.category);
+  if (state.employmentType) {
+    params.set(FILTER_URL_PARAMS.employmentType, state.employmentType);
+  }
+  state.branches.forEach((branch) => {
+    params.append(FILTER_URL_PARAMS.branch, branch);
+  });
+
+  const nextQuery = params.toString();
+  const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash}`;
+  const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+
+  if (nextUrl !== currentUrl) {
+    window.history.replaceState({}, "", nextUrl);
+  }
+
+  debugLog("state", state);
 }
 
 function updateCountElements() {
@@ -463,17 +581,14 @@ function itemMatches(row, jobTerm, selectedCategory, radius, employmentType, sel
 }
 
 function hasAnyActiveFilter() {
-  const jobTerm = normalizeText(document.getElementById("job-search")?.value || "");
-  const locationValue = normalizeText(document.getElementById("location-input")?.value || "");
+  const jobTerm = normalizeText(getJobSearchInput()?.value || "");
+  const locationValue = normalizeText(getLocationInput()?.value || "");
   const selectedCategory = normalizeText(getCategorySelect()?.value || "");
   const { selectedBranches } = getBranchFilterState();
   const employmentType = normalizeText(
-    document.getElementById("employment-type-select")?.value || ""
+    getEmploymentTypeSelect()?.value || ""
   );
-  const radius = parseInt(
-    document.getElementById("radius-select")?.value || "",
-    10
-  );
+  const radius = parseInt(getRadiusSelect()?.value || "", 10);
 
   return Boolean(
     jobTerm ||
@@ -488,16 +603,13 @@ function hasAnyActiveFilter() {
 
 function filterItems() {
   const items = getAllJobItems();
-  const jobTerm = normalizeText(document.getElementById("job-search")?.value || "");
+  const jobTerm = normalizeText(getJobSearchInput()?.value || "");
   const selectedCategory = normalizeText(getCategorySelect()?.value || "");
   const { selectedBranches } = getBranchFilterState();
   const employmentType = normalizeText(
-    document.getElementById("employment-type-select")?.value || ""
+    getEmploymentTypeSelect()?.value || ""
   );
-  const radius = parseInt(
-    document.getElementById("radius-select")?.value || "",
-    10
-  );
+  const radius = parseInt(getRadiusSelect()?.value || "", 10);
 
   filteredItems = items.filter((row) =>
     itemMatches(
@@ -546,6 +658,7 @@ function runFilters(resetVisible = true) {
   }
 
   filterItems();
+  updateFilterUrl();
   renderItems();
 }
 
@@ -730,7 +843,7 @@ function showLocationSuggestions(value) {
 function selectLocation(item) {
   selectedLocation = item;
 
-  const locationInput = document.getElementById("location-input");
+  const locationInput = getLocationInput();
 
   if (locationInput) {
     locationInput.value = getSuggestionLabel(item);
@@ -741,12 +854,13 @@ function selectLocation(item) {
 }
 
 function applyInitialQueryParams() {
-  const { job, location, radius, employmentType } = getQueryParams();
+  const { job, location, radius, category, employmentType, branches } = getQueryParams();
 
-  const jobSearch = document.getElementById("job-search");
-  const locationInput = document.getElementById("location-input");
-  const radiusSelect = document.getElementById("radius-select");
-  const employmentTypeSelect = document.getElementById("employment-type-select");
+  const jobSearch = getJobSearchInput();
+  const locationInput = getLocationInput();
+  const radiusSelect = getRadiusSelect();
+  const categorySelect = getCategorySelect();
+  const employmentTypeSelect = getEmploymentTypeSelect();
 
   if (job && jobSearch) {
     jobSearch.value = job;
@@ -760,6 +874,14 @@ function applyInitialQueryParams() {
     employmentTypeSelect.value = employmentType;
   }
 
+  if (category && categorySelect) {
+    categorySelect.value = category;
+  }
+
+  if (branches.length) {
+    setSelectedBranchLabels(branches);
+  }
+
   if (location && locationInput) {
     const match = findExactLocationMatch(location);
 
@@ -770,15 +892,17 @@ function applyInitialQueryParams() {
       locationInput.value = location;
     }
   }
+
+  hasInitializedFilterState = true;
 }
 
 function resetFilter() {
-  const jobSearch = document.getElementById("job-search");
-  const locationInput = document.getElementById("location-input");
+  const jobSearch = getJobSearchInput();
+  const locationInput = getLocationInput();
   const categorySelect = getCategorySelect();
   const branchFilterContainer = getBranchFilterContainer();
-  const employmentTypeSelect = document.getElementById("employment-type-select");
-  const radiusSelect = document.getElementById("radius-select");
+  const employmentTypeSelect = getEmploymentTypeSelect();
+  const radiusSelect = getRadiusSelect();
 
   selectedLocation = null;
 
@@ -807,10 +931,7 @@ function resetFilter() {
 }
 
 function useGPSFallback() {
-  const radius = parseInt(
-    document.getElementById("radius-select")?.value || "",
-    10
-  );
+  const radius = parseInt(getRadiusSelect()?.value || "", 10);
 
   if (Number.isNaN(radius) || radius <= 0) {
     runFilters(true);
@@ -829,7 +950,7 @@ function useGPSFallback() {
       if (nearest) {
         selectedLocation = nearest;
 
-        const locationInput = document.getElementById("location-input");
+        const locationInput = getLocationInput();
         if (locationInput) {
           locationInput.value = getSuggestionLabel(nearest);
         }
@@ -844,10 +965,7 @@ function useGPSFallback() {
 }
 
 function autoRunFilter() {
-  const radius = parseInt(
-    document.getElementById("radius-select")?.value || "",
-    10
-  );
+  const radius = parseInt(getRadiusSelect()?.value || "", 10);
 
   if (!selectedLocation && !Number.isNaN(radius) && radius > 0) {
     useGPSFallback();
@@ -1245,12 +1363,12 @@ document.addEventListener("DOMContentLoaded", () => {
   observeJobListChanges();
   bootJobsMap();
 
-  const jobSearch = document.getElementById("job-search");
-  const locationInput = document.getElementById("location-input");
+  const jobSearch = getJobSearchInput();
+  const locationInput = getLocationInput();
   const categorySelect = getCategorySelect();
   const branchFilterContainer = getBranchFilterContainer();
-  const employmentTypeSelect = document.getElementById("employment-type-select");
-  const radiusSelect = document.getElementById("radius-select");
+  const employmentTypeSelect = getEmploymentTypeSelect();
+  const radiusSelect = getRadiusSelect();
   const resetBtn = document.getElementById("btn-reset");
   const loadMoreBtn = document.getElementById("load-more-btn");
 
