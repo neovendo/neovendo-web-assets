@@ -202,8 +202,13 @@ function normalizeText(str) {
     .replace(/ae/g, "a")
     .replace(/oe/g, "o")
     .replace(/ue/g, "u")
-    .trim()
-    .replace(/\s+/g, " ");
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function normalizeTextToTokens(str) {
+  const normalized = normalizeText(str);
+  return normalized ? normalized.split(" ") : [];
 }
 
 function getDistance(lat1, lon1, lat2, lon2) {
@@ -542,17 +547,27 @@ function updateCountElements() {
   }
 }
 
-function matchesJobFilter(row, searchTerm) {
-  if (!searchTerm) return true;
+const jobSearchTextCache = new WeakMap();
 
-  const jobTitle = normalizeText(row.dataset.jobtitle || "");
-  const category1 = normalizeText(row.dataset.category1 || "");
-  const category2 = normalizeText(row.dataset.category2 || "");
-  const plz = normalizeText(row.dataset.plz || "");
-  const ort = normalizeText(row.dataset.ort || "");
+// Job-item data-* Attribute sind nach dem Rendern statisch, daher ist ein
+// WeakMap-Cache pro Element sicher und spart bei jedem Tastendruck N normalizeText-Aufrufe.
+function getJobSearchText(row) {
+  if (jobSearchTextCache.has(row)) return jobSearchTextCache.get(row);
 
-  const searchableText = `${jobTitle} ${category1} ${category2} ${plz} ${ort}`;
-  return searchableText.includes(searchTerm);
+  const searchText = normalizeText(
+    `${row.dataset.jobtitle || ""} ${row.dataset.category1 || ""} ` +
+      `${row.dataset.category2 || ""} ${row.dataset.plz || ""} ${row.dataset.ort || ""}`
+  );
+
+  jobSearchTextCache.set(row, searchText);
+  return searchText;
+}
+
+function matchesJobFilter(row, searchTokens) {
+  if (!searchTokens.length) return true;
+
+  const searchableText = getJobSearchText(row);
+  return searchTokens.every((token) => searchableText.includes(token));
 }
 
 function matchesCategoryFilter(row, category) {
@@ -605,8 +620,8 @@ function matchesRadiusFilter(row, centerLat, centerLon, radius) {
   return getDistance(centerLat, centerLon, lat, lon) <= radius;
 }
 
-function itemMatches(row, jobTerm, selectedCategory, radius, employmentType, selectedBranches) {
-  const jobMatch = matchesJobFilter(row, jobTerm);
+function itemMatches(row, jobTokens, selectedCategory, radius, employmentType, selectedBranches) {
+  const jobMatch = matchesJobFilter(row, jobTokens);
   const categoryMatch = matchesCategoryFilter(row, selectedCategory);
   const employmentTypeMatch = matchesEmploymentTypeFilter(row, employmentType);
   const branchMatch = matchesBranchFilter(row, selectedBranches);
@@ -658,7 +673,7 @@ function hasAnyActiveFilter() {
 
 function filterItems() {
   const items = getAllJobItems();
-  const jobTerm = normalizeText(getJobSearchInput()?.value || "");
+  const jobTokens = normalizeTextToTokens(getJobSearchInput()?.value || "");
   const selectedCategory = normalizeText(getCategorySelect()?.value || "");
   const { selectedBranches } = getBranchFilterState();
   const employmentType = normalizeText(
@@ -669,7 +684,7 @@ function filterItems() {
   filteredItems = items.filter((row) =>
     itemMatches(
       row,
-      jobTerm,
+      jobTokens,
       selectedCategory,
       radius,
       employmentType,
