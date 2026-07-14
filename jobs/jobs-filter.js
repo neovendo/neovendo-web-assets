@@ -138,6 +138,9 @@ async function loadPLZData() {
         .map((item) => {
           const plz = String(item.plz || "").trim().padStart(5, "0");
           const ort = String(item.ort || "").trim();
+          // Optional clean city (e.g. "Neumünster") for PLZ-independent search.
+          // Falls back to the display name when the dataset has no dedicated field.
+          const city = String(item.city || "").trim();
           const lat = parseFloat(item.lat);
           const lon = parseFloat(item.lon);
 
@@ -146,6 +149,7 @@ async function loadPLZData() {
           return {
             plz,
             ort,
+            city,
             lat,
             lon,
           };
@@ -209,6 +213,45 @@ function normalizeText(str) {
 function normalizeTextToTokens(str) {
   const normalized = normalizeText(str);
   return normalized ? normalized.split(" ") : [];
+}
+
+// Normalized clean city name for an entry: prefers an explicit `city` field,
+// otherwise derives it from the display name by dropping a trailing region
+// (e.g. "Neumünster, Holstein" -> "neumunster").
+function getCityKey(source) {
+  const raw =
+    typeof source === "string"
+      ? source
+      : (source && (source.city || source.ort)) || "";
+  return normalizeText(raw.split(",")[0]);
+}
+
+// Human-readable clean city label (for the "… – alle PLZ" suggestion).
+function getCityLabel(item) {
+  const raw = (item && (item.city || item.ort)) || "";
+  return raw.split(",")[0].trim();
+}
+
+// Unifies every selectedLocation into one shape: { mode, plz, cityKey, lat, lon }.
+// mode "city" matches all PLZ of a city; mode "plz" matches one exact PLZ.
+function toSelectedLocation(item) {
+  if (!item) return null;
+  if (item.__mode === "city") {
+    return {
+      mode: "city",
+      cityKey: item.cityKey,
+      plz: item.plz || "",
+      lat: item.lat,
+      lon: item.lon,
+    };
+  }
+  return {
+    mode: "plz",
+    cityKey: getCityKey(item),
+    plz: item.plz,
+    lat: item.lat,
+    lon: item.lon,
+  };
 }
 
 function getDistance(lat1, lon1, lat2, lon2) {
@@ -596,6 +639,17 @@ function matchesBranchFilter(row, selectedBranches) {
 function matchesSelectedLocation(row, location) {
   if (!location) return true;
 
+  // City mode: match every PLZ that belongs to the selected city.
+  if (location.mode === "city" && location.cityKey) {
+    const rowCity = getCityKey(row.dataset.ort || "");
+    if (!rowCity) return false;
+    return (
+      rowCity === location.cityKey ||
+      rowCity.startsWith(location.cityKey + " ")
+    );
+  }
+
+  // PLZ mode: exact postcode (unchanged behaviour).
   const rowPlz = (row.dataset.plz || "").trim();
   return rowPlz === location.plz;
 }
@@ -783,25 +837,41 @@ function findExactLocationMatch(value) {
     });
     if (exactByPlzAndText) return exactByPlzAndText;
 
-    const exactByPlz = postcodeMatches.length === 1 ? postcodeMatches[0] : null;
-    if (exactByPlz) return exactByPlz;
+    // Any recognized postcode resolves to PLZ mode (search a specific PLZ),
+    // even when that postcode maps to several display names.
+    if (postcodeMatches.length) return postcodeMatches[0];
   }
 
-  return (
-    plzList.find((item) => {
-      return (
-        [
-          item.ort,
-          `${item.plz} ${item.ort}`,
-          `${item.plz} - ${item.ort}`,
-          `${item.plz} – ${item.ort}`,
-        ].some((candidate) => normalizeText(candidate) === query)
-      );
-    }) || null
+  // Exact "PLZ - Ort" label -> PLZ mode.
+  const exactLabelMatch = plzList.find((item) =>
+    [
+      `${item.plz} ${item.ort}`,
+      `${item.plz} - ${item.ort}`,
+      `${item.plz} – ${item.ort}`,
+    ].some((candidate) => normalizeText(candidate) === query)
   );
+  if (exactLabelMatch) return exactLabelMatch;
+
+  // Plain city name -> city mode (PLZ-independent, all PLZ of that city).
+  const cityMatch = plzList.find((item) => getCityKey(item) === query);
+  if (cityMatch) {
+    return {
+      __mode: "city",
+      cityKey: getCityKey(cityMatch),
+      cityLabel: getCityLabel(cityMatch),
+      plz: cityMatch.plz,
+      lat: cityMatch.lat,
+      lon: cityMatch.lon,
+    };
+  }
+
+  return null;
 }
 
 function getSuggestionLabel(item) {
+  if (item && item.__mode === "city") {
+    return `${item.cityLabel} – alle PLZ`;
+  }
   return `${item.plz} - ${item.ort}`;
 }
 
@@ -862,7 +932,9 @@ function renderLocationSuggestions(matches) {
       highlightedSuggestionIndex = index;
       updateSuggestionHighlight();
     });
-    div.addEventListener("mousedown", (event) => {
+    // pointerdown covers mouse, touch and pen — fixes suggestion taps on mobile
+    // (mousedown alone is unreliable on touch devices).
+    div.addEventListener("pointerdown", (event) => {
       event.preventDefault();
       selectLocation(item);
     });
@@ -881,28 +953,53 @@ function showLocationSuggestions(value) {
 
   const digitsOnly = query.replace(/\D/g, "");
 
-  const matches = dedupeLocationSuggestions(plzList
+  const rawMatches = dedupeLocationSuggestions(plzList
     .filter((item) => {
       const searchableValues = [
         item.ort,
+        item.city,
         `${item.plz} ${item.ort}`,
         `${item.plz} - ${item.ort}`,
         `${item.plz} – ${item.ort}`,
-      ].map(normalizeText);
+      ]
+        .filter(Boolean)
+        .map(normalizeText);
 
       return (
         (digitsOnly.length >= 1 && item.plz.startsWith(digitsOnly)) ||
         searchableValues.some((value) => value.includes(query))
       );
-    })
-    .slice(0, 12));
+    }));
 
-  if (!matches.length) return;
-  renderLocationSuggestions(matches);
+  if (!rawMatches.length) return;
+
+  // Prepend "Stadt – alle PLZ" entries for the distinct cities in the result
+  // set, so an Ort can be searched PLZ-independently. Skipped for pure PLZ input.
+  const citySuggestions = [];
+  if (digitsOnly.length === 0) {
+    const seenCities = new Set();
+    rawMatches.forEach((item) => {
+      const cityKey = getCityKey(item);
+      if (!cityKey || seenCities.has(cityKey)) return;
+      if (!cityKey.includes(query) && !query.includes(cityKey)) return;
+      seenCities.add(cityKey);
+      citySuggestions.push({
+        __mode: "city",
+        cityKey,
+        cityLabel: getCityLabel(item),
+        plz: item.plz,
+        lat: item.lat,
+        lon: item.lon,
+      });
+    });
+  }
+
+  const combined = [...citySuggestions.slice(0, 3), ...rawMatches].slice(0, 12);
+  renderLocationSuggestions(combined);
 }
 
 function selectLocation(item) {
-  selectedLocation = item;
+  selectedLocation = toSelectedLocation(item);
 
   const locationInput = getLocationInput();
 
@@ -947,7 +1044,7 @@ function applyInitialQueryParams() {
     const match = findExactLocationMatch(location);
 
     if (match) {
-      selectedLocation = match;
+      selectedLocation = toSelectedLocation(match);
       locationInput.value = getSuggestionLabel(match);
     } else {
       locationInput.value = location;
@@ -1010,7 +1107,7 @@ function useGPSFallback() {
         const nearest = findNearestPLZ(pos.coords.latitude, pos.coords.longitude);
 
         if (nearest) {
-          selectedLocation = nearest;
+          selectedLocation = toSelectedLocation(nearest);
 
           const locationInput = getLocationInput();
           if (locationInput) {
@@ -1473,7 +1570,7 @@ document.addEventListener("DOMContentLoaded", () => {
           const match = findExactLocationMatch(locationInput.value.trim());
 
           if (match) {
-            selectedLocation = match;
+            selectedLocation = toSelectedLocation(match);
             locationInput.value = getSuggestionLabel(match);
           } else if (!locationInput.value.trim()) {
             selectedLocation = null;
