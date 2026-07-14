@@ -17,19 +17,27 @@
 - Empty State
 - aktiven Vorschlag im Orts-Dropdown
 
-## Externe Daten
+## Externe Daten (PLZ)
 
-Das Script laedt eine CSV mit diesem Format:
+Das Script laedt `data/plz-data.json` (relativ zum Script-`src`). Jede Zeile:
 
-```txt
-postcode;city;suburb;display_name;longitude;latitude;state
+```json
+{ "plz": "24534", "city": "Neumünster", "ort": "Neumünster, Holstein", "lat": 54.07, "lon": 9.98 }
 ```
 
-Aktuell ist im Script diese URL hinterlegt:
+- `city` = saubere Stadt -> PLZ-unabhaengige Ortssuche
+- `ort`  = Anzeigename (Ortsteil/Region) fuer die Vorschlaege
+- `lat`/`lon` = Zentrum fuer die Umkreissuche
 
-```js
-const csvUrl = "https://raw.githubusercontent.com/neovendo/neovendo/refs/heads/main/PLZ_STREETCODE_GEO.csv";
+`plz-data.json` wird aus der massgeblichen Dashboard-CSV generiert
+(`ba-admin-dashboard/public/data/PLZ_STREETCODE_FINAL.csv` = Single Source of Truth,
+Format `postcode;city;suburb;display_name;longitude;latitude;state`):
+
+```sh
+node jobs/build/generate-plz-data.mjs /pfad/zu/PLZ_STREETCODE_FINAL.csv
 ```
+
+So landen Korrekturen an der PLZ-Liste (z. B. neu ergaenzte Orte) automatisch auch auf der Website.
 
 ## Einbindung
 
@@ -146,12 +154,14 @@ Beispiel:
 ## Verhalten der Ortssuche
 
 - Suche ist diakritik-tolerant (`Luebeck` findet `Lübeck`)
-- Vorschlaege suchen ueber:
-  - `display_name`
-  - `city`
-  - `suburb`
-  - `PLZ + Ort`
-- Reine PLZ werden nur dann automatisch uebernommen, wenn sie eindeutig sind
+- Zwei Modi:
+  - **Stadt-Modus** (Ortsname eingegeben/gewaehlt): matcht **alle PLZ** der Stadt
+    ueber `data-ort`. Die Vorschlagsliste bietet dafuer oben einen Eintrag
+    „<Stadt> – alle PLZ" an. So laesst sich z. B. „ganz Hamburg" durchsuchen.
+  - **PLZ-Modus** (reine PLZ eingegeben/gewaehlt): matcht die **exakte PLZ**.
+- Vorschlaege suchen ueber `display_name`, `city`, `suburb`, `PLZ + Ort`
+- Eine erkannte PLZ wird auch bei mehreren Anzeigenamen als PLZ-Modus uebernommen
+- Auswahl per Tap funktioniert auf Touch-Geraeten (`pointerdown`)
 - Tastatursteuerung:
   - `ArrowDown`
   - `ArrowUp`
