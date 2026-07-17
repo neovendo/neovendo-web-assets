@@ -27,3 +27,19 @@
   background: rgba(15, 23, 42, 0.08);
   color: #0f172a;
 }
+
+/* "Stadt – alle PLZ"-Vorschläge deutlich von den einzelnen PLZ-Zeilen abheben:
+   fett, Pin davor, leichter Akzent-Hintergrund und Trennlinie zum PLZ-Block. */
+#location-suggestions [data-suggestion-index].is-city-suggestion {
+  font-weight: 700;
+  background: rgba(15, 23, 42, 0.05);
+  border-bottom: 1px solid rgba(15, 23, 42, 0.12);
+}
+
+#location-suggestions [data-suggestion-index].is-city-suggestion::before {
+  content: "📍 ";
+}
+
+#location-suggestions [data-suggestion-index].is-city-suggestion.is-active {
+  background: rgba(15, 23, 42, 0.12);
+}

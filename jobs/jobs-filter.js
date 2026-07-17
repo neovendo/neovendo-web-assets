@@ -146,12 +146,21 @@ async function loadPLZData() {
 
           if (!plz || !ort || Number.isNaN(lat) || Number.isNaN(lon)) return null;
 
+          // Normalisierte Suchfelder EINMALIG beim Laden vorberechnen. Ohne das
+          // müsste jede Tastatureingabe normalizeText() (mehrere Regex + teure
+          // NFD-Normalisierung) über ~89k Einträge laufen lassen -> Ortssuche
+          // extrem langsam. Die drei "PLZ - Ort"-Varianten kollabieren nach der
+          // Normalisierung zum selben String, deshalb genügt ein searchLabel.
           return {
             plz,
             ort,
             city,
             lat,
             lon,
+            cityKey: getCityKey({ city, ort }),
+            searchOrt: normalizeText(ort),
+            searchCity: normalizeText(city),
+            searchLabel: normalizeText(`${plz} ${ort}`),
           };
         })
         .filter(Boolean);
@@ -827,14 +836,9 @@ function findExactLocationMatch(value) {
   if (digitsOnly.length >= 5) {
     const postcode = digitsOnly.slice(0, 5);
     const postcodeMatches = plzList.filter((item) => item.plz === postcode);
-    const exactByPlzAndText = postcodeMatches.find((item) => {
-      return [
-        item.ort,
-        `${item.plz} ${item.ort}`,
-        `${item.plz} - ${item.ort}`,
-        `${item.plz} – ${item.ort}`,
-      ].some((candidate) => normalizeText(candidate) === query);
-    });
+    const exactByPlzAndText = postcodeMatches.find(
+      (item) => item.searchOrt === query || item.searchLabel === query
+    );
     if (exactByPlzAndText) return exactByPlzAndText;
 
     // Any recognized postcode resolves to PLZ mode (search a specific PLZ),
@@ -843,21 +847,15 @@ function findExactLocationMatch(value) {
   }
 
   // Exact "PLZ - Ort" label -> PLZ mode.
-  const exactLabelMatch = plzList.find((item) =>
-    [
-      `${item.plz} ${item.ort}`,
-      `${item.plz} - ${item.ort}`,
-      `${item.plz} – ${item.ort}`,
-    ].some((candidate) => normalizeText(candidate) === query)
-  );
+  const exactLabelMatch = plzList.find((item) => item.searchLabel === query);
   if (exactLabelMatch) return exactLabelMatch;
 
   // Plain city name -> city mode (PLZ-independent, all PLZ of that city).
-  const cityMatch = plzList.find((item) => getCityKey(item) === query);
+  const cityMatch = plzList.find((item) => item.cityKey === query);
   if (cityMatch) {
     return {
       __mode: "city",
-      cityKey: getCityKey(cityMatch),
+      cityKey: cityMatch.cityKey,
       cityLabel: getCityLabel(cityMatch),
       plz: cityMatch.plz,
       lat: cityMatch.lat,
@@ -924,6 +922,9 @@ function renderLocationSuggestions(matches) {
     const div = document.createElement("div");
     div.textContent = getSuggestionLabel(item);
     div.setAttribute("data-suggestion-index", String(index));
+    if (item.__mode === "city") {
+      div.classList.add("is-city-suggestion");
+    }
     if (index === highlightedSuggestionIndex) {
       div.classList.add("is-active");
       div.setAttribute("aria-selected", "true");
@@ -955,19 +956,13 @@ function showLocationSuggestions(value) {
 
   const rawMatches = dedupeLocationSuggestions(plzList
     .filter((item) => {
-      const searchableValues = [
-        item.ort,
-        item.city,
-        `${item.plz} ${item.ort}`,
-        `${item.plz} - ${item.ort}`,
-        `${item.plz} – ${item.ort}`,
-      ]
-        .filter(Boolean)
-        .map(normalizeText);
-
+      if (digitsOnly.length >= 1 && item.plz.startsWith(digitsOnly)) return true;
+      // Billiges .includes gegen die in loadPLZData vorberechneten Felder
+      // (kein normalizeText pro Tastendruck mehr).
       return (
-        (digitsOnly.length >= 1 && item.plz.startsWith(digitsOnly)) ||
-        searchableValues.some((value) => value.includes(query))
+        item.searchOrt.includes(query) ||
+        (item.searchCity && item.searchCity.includes(query)) ||
+        item.searchLabel.includes(query)
       );
     }));
 
@@ -979,7 +974,7 @@ function showLocationSuggestions(value) {
   if (digitsOnly.length === 0) {
     const seenCities = new Set();
     rawMatches.forEach((item) => {
-      const cityKey = getCityKey(item);
+      const cityKey = item.cityKey;
       if (!cityKey || seenCities.has(cityKey)) return;
       if (!cityKey.includes(query) && !query.includes(cityKey)) return;
       seenCities.add(cityKey);
