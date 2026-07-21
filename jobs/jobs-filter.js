@@ -31,6 +31,7 @@ let selectedLocation = null;
 let filteredItems = [];
 let visibleCount = VISIBLE_STEP;
 let jobsListObserver = null;
+let observedListRoot = null;
 let currentLocationSuggestions = [];
 let highlightedSuggestionIndex = -1;
 let filterDebounceTimeout = null;
@@ -783,6 +784,10 @@ function renderItems() {
 }
 
 function runFilters(resetVisible = true) {
+  // Muss vor dem items-Check laufen: Hat Finsweet einen unserer Inputwerte als
+  // eigenen Textfilter uebernommen, ist die Liste komplett leer.
+  if (guardFinsweetFilters()) return;
+
   const items = getAllJobItems();
   if (!items.length) return;
 
@@ -1189,14 +1194,115 @@ function handleLocationInputKeydown(event) {
   }
 }
 
+/* =========================
+   FINSWEET
+========================= */
+
+// Die Filter-Inputs tragen in Webflow zusaetzlich Finsweet-Attribute
+// (fs-list-field="title, tag" / "ort, plz" / "distance"). Finsweet liest deren
+// Werte beim Start – also genau das, was dieses Script kurz zuvor aus den
+// Query-Parametern in #job-search bzw. #location-input geschrieben hat – und
+// filtert die Liste im Volltext dagegen. Die Job-Items markieren diese Felder
+// aber gar nicht, deshalb passt kein einziges Item und Finsweet entfernt die
+// komplette Liste aus dem DOM: Ein Link wie ?location=24534 - Neumünster landet
+// im leeren Ergebnis, obwohl hier zwei Treffer gezaehlt werden.
+// Gefiltert wird in diesem Script, Finsweet soll die Liste nur laden. Also die
+// Feld-Attribute abnehmen, bevor Finsweet sie liest.
+const FINSWEET_FILTER_INPUT_IDS = [
+  "job-search",
+  "location-input",
+  "radius-filter-value",
+];
+const FINSWEET_MIRRORED_FIELD_KEYS = ["title, tag", "ort, plz", "distance"];
+
+let finsweetListInstances = [];
+let finsweetRestarted = false;
+
+function detachFinsweetFilterFields() {
+  let detached = false;
+
+  FINSWEET_FILTER_INPUT_IDS.forEach((id) => {
+    const input = document.getElementById(id);
+    if (!input || !input.hasAttribute("fs-list-field")) return;
+    input.removeAttribute("fs-list-field");
+    input.removeAttribute("fs-list-operator");
+    input.removeAttribute("fs-list-fieldtype");
+    detached = true;
+  });
+
+  return detached;
+}
+
+function hasMirroredFinsweetFilter(list) {
+  const groups = list?.filters?.value?.groups;
+  if (!Array.isArray(groups)) return false;
+
+  return groups.some((group) =>
+    (group.conditions || []).some((condition) =>
+      FINSWEET_MIRRORED_FIELD_KEYS.includes(condition.fieldKey)
+    )
+  );
+}
+
+// Finsweet laedt als async-Modul und kann diesem Script zuvorkommen. Dann sind
+// die Bedingungen schon gebaut und nur ein Neustart raeumt sie weg.
+function guardFinsweetFilters() {
+  if (finsweetRestarted) return false;
+  if (!finsweetListInstances.some(hasMirroredFinsweetFilter)) return false;
+
+  detachFinsweetFilterFields();
+
+  const restart = window.FinsweetAttributes?.modules?.list?.restart;
+  if (typeof restart !== "function") return false;
+
+  finsweetRestarted = true;
+  debugLog("finsweet list restart", FINSWEET_MIRRORED_FIELD_KEYS);
+  restart();
+
+  return true;
+}
+
+function bindFinsweetFilters() {
+  detachFinsweetFilterFields();
+
+  window.FinsweetAttributes = window.FinsweetAttributes || [];
+  window.FinsweetAttributes.push([
+    "list",
+    (listInstances) => {
+      finsweetListInstances = Array.isArray(listInstances)
+        ? listInstances
+        : [listInstances].filter(Boolean);
+
+      if (guardFinsweetFilters()) return;
+
+      finsweetListInstances.forEach((list) => {
+        // Laeuft nach jedem Finsweet-Render erneut: Der MutationObserver haengt
+        // dann ggf. am ausgetauschten Container, und nachgeladene Items sind
+        // noch ungefiltert sichtbar.
+        list.effect?.(() => {
+          void list.items?.value?.length;
+          observeJobListChanges();
+          scheduleFilterRun(false);
+        });
+      });
+
+      scheduleFilterRun(true);
+    },
+  ]);
+}
+
 function observeJobListChanges() {
-  const listRoot =
-    document.querySelector('[fs-list-element="list"]') ||
-    document.querySelector(".w-dyn-items") ||
-    document.querySelector(".jobs-list");
+  const listRoot = getJobsListContainer();
 
   if (!listRoot) return;
-  if (jobsListObserver) return;
+  // Finsweet tauscht den Listen-Container beim Rendern aus. Haengt der Observer
+  // noch am alten Knoten, bleiben nachgeladene Items ungefiltert sichtbar.
+  if (jobsListObserver && observedListRoot === listRoot) return;
+
+  if (jobsListObserver) {
+    jobsListObserver.disconnect();
+  }
+  observedListRoot = listRoot;
 
   jobsListObserver = new MutationObserver(() => {
     if (jobsMapRenderFrame) {
@@ -1525,6 +1631,7 @@ function bootJobsMap() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  bindFinsweetFilters();
   observeJobListChanges();
   bootJobsMap();
 
@@ -1655,3 +1762,8 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 });
+
+// So frueh wie moeglich (das Script laeuft mit defer, das DOM steht also
+// bereits): Finsweet die Feld-Attribute unserer Filter-Inputs abnehmen, bevor
+// sein async geladenes Modul sie liest. Siehe FINSWEET-Block.
+detachFinsweetFilterFields();
