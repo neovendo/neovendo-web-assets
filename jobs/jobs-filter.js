@@ -828,7 +828,11 @@ function findNearestPLZ(latUser, lonUser) {
 }
 
 function findExactLocationMatch(value) {
-  const query = normalizeText(value);
+  // "… – alle PLZ" ist der Anzeigetext des Stadt-Vorschlags – und genau der
+  // Wert, den updateFilterUrl() selbst in die URL schreibt. Ohne dieses
+  // Abschneiden liesse sich eine geteilte oder neu geladene URL nicht mehr
+  // aufloesen und der Ortsfilter fiele still weg.
+  const query = normalizeText(value).replace(/\s*alle\s+plz$/, "").trim();
   if (!query) return null;
 
   const digitsOnly = query.replace(/\D/g, "");

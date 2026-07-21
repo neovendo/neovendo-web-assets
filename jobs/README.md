@@ -17,6 +17,10 @@
 - Empty State
 - aktiven Vorschlag im Orts-Dropdown
 
+`home-job-search.js` bedient das kleine Suchformular auf der Startseite. Es
+filtert nichts, sondern baut nur die Ergebnis-URL fuer `/jobs`. Details siehe
+[Startseiten-Formular](#startseiten-formular-home-job-searchjs).
+
 ## Externe Daten (PLZ)
 
 Das Script laedt `data/plz-data.json` (relativ zum Script-`src`). Jede Zeile:
@@ -181,3 +185,46 @@ Leaflet wird dynamisch geladen:
 - Deshalb hat das Script einen eigenen Empty State.
 - Fuer kleine Radien haengt die Genauigkeit direkt von den gespeicherten Job-Koordinaten ab.
 - Fuer die Karte werden die Koordinaten aus den Jobdaten verwendet, nicht aus der CSV.
+- Job-Items ohne `data-latitude`/`data-longitude` koennen bei aktiver Umkreissuche
+  nicht getroffen werden. Fehlen die Koordinaten im CMS, hilft nur ein Fix in der
+  Datenquelle (Dashboard), nicht im Filter.
+
+## Startseiten-Formular (`home-job-search.js`)
+
+Das Script gehoert auf die Startseite, nicht auf `/jobs`. Es filtert nichts,
+sondern baut aus Jobtitel, Ort und Radius die Ergebnis-URL fuer `/jobs` und
+oeffnet sie in einem neuen Tab.
+
+```html
+<script src="https://cdn.jsdelivr.net/gh/<user>/<repo>@main/jobs/home-job-search.js" defer></script>
+```
+
+Benoetigte IDs:
+
+- `home-job-filter-form`
+- `home-job-filter-submit`
+- `home-job-search`
+- `home-location-input`
+- `home-location-suggestions`
+- `home-location-wrapper`
+- `home-radius-select`
+
+Erzeugte Query-Parameter (dieselben, die `jobs-filter.js` liest):
+
+- `job` – Freitext aus dem Titelfeld
+- `location` – bei PLZ-Auswahl `"<plz> - <ort>"`, bei Stadt-Auswahl nur der
+  saubere Stadtname (`Rostock`), sonst der eingegebene Freitext
+- `radius` – **nur zusammen mit einem Ort**
+
+Wichtige Punkte:
+
+- Die Ortsvorschlaege kommen aus derselben `data/plz-data.json` wie auf `/jobs`,
+  inklusive Stadt-Modus („<Stadt> – alle PLZ"), Diakritik-Toleranz, Touch- und
+  Tastaturbedienung. Die Datei wird erst geladen, wenn das Ortsfeld angefasst
+  wird (gzip ~800 KB).
+- Ein Radius ohne Ort hat auf `/jobs` kein Zentrum und wird deshalb nicht
+  uebergeben. Hat die Platzhalter-Option des Selects („Radius wählen") in Webflow
+  faelschlich einen echten Wert, setzt das Script sie beim Start auf `""`.
+- Die Ortslogik ist eine Kopie aus `jobs-filter.js`. Aenderungen dort muessen hier
+  mitgezogen werden, sonst bietet die Startseite Orte an, die `/jobs` nicht
+  aufloesen kann.
