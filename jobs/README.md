@@ -45,12 +45,28 @@ So landen Korrekturen an der PLZ-Liste (z. B. neu ergaenzte Orte) automatisch au
 
 ## Einbindung
 
-Beispiel:
+Die Live-Seiten binden die Dateien auf einen **Commit gepinnt** ein, nicht ueber
+`@main`:
 
 ```html
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/<user>/<repo>@main/jobs/jobs-filter.css">
-<script src="https://cdn.jsdelivr.net/gh/<user>/<repo>@main/jobs/jobs-filter.js" defer></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/<user>/<repo>@<commit>/jobs/jobs-filter.css">
+<script src="https://cdn.jsdelivr.net/gh/<user>/<repo>@<commit>/jobs/jobs-filter.js" defer></script>
 ```
+
+Grund: Auf `@main` setzt jsDelivr `max-age=7 Tage` im Browser. Ein Fix erreicht
+Besucher, die die Seite kuerzlich offen hatten, dann tagelang nicht — und ein
+jsDelivr-Purge hilft nicht, der leert nur den CDN-Cache. Ein neuer Commit-Hash
+ist eine neue URL und wirkt sofort.
+
+**Preis: Ein Merge nach `main` allein aendert auf der Website gar nichts.** Nach
+jedem Deploy muss in Webflow der Hash im Script-Tag hochgezogen und die Seite neu
+veroeffentlicht werden. Betroffen sind:
+
+- Seite „Job" (`/jobs`): `jobs-filter.css` + `jobs-filter.js`
+- Startseite: `home-job-search.js`
+
+`data/plz-data.json` wird relativ zum Script-`src` geladen und folgt dem Pin
+automatisch.
 
 ## Benoetigte IDs
 
@@ -196,7 +212,7 @@ sondern baut aus Jobtitel, Ort und Radius die Ergebnis-URL fuer `/jobs` und
 oeffnet sie in einem neuen Tab.
 
 ```html
-<script src="https://cdn.jsdelivr.net/gh/<user>/<repo>@main/jobs/home-job-search.js" defer></script>
+<script src="https://cdn.jsdelivr.net/gh/<user>/<repo>@<commit>/jobs/home-job-search.js" defer></script>
 ```
 
 Benoetigte IDs:
