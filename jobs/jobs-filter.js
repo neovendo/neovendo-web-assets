@@ -3,8 +3,24 @@ const LEAFLET_JS_URL = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
 const LEAFLET_CSS_URL = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
 const JOBS_MAP_DEFAULT_CENTER = [51.1657, 10.4515];
 const JOBS_MAP_DEFAULT_ZOOM = 6;
-const JOBS_MAP_TILE_URL = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
-const JOBS_MAP_TILE_ATTRIBUTION = "&copy; OpenStreetMap contributors &copy; CARTO";
+// Kartenhintergrund ohne API-Key. CARTO (basemaps.cartocdn.com) verlangt seit
+// Ende August 2026 einen Key und liefert sonst Kacheln mit "API KEY REQUIRED".
+// OpenFreeMap: Vektorkarte, kostenlos, ohne Key/Registrierung, auch kommerziell.
+// Gerendert per MapLibre GL, das ueber maplibre-gl-leaflet als Leaflet-Layer laeuft.
+const MAPLIBRE_JS_URL = "https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js";
+const MAPLIBRE_CSS_URL = "https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css";
+const MAPLIBRE_LEAFLET_JS_URL =
+  "https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js";
+const JOBS_MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+const JOBS_MAP_STYLE_ATTRIBUTION =
+  '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> ' +
+  '&copy; <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a> ' +
+  '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>-Mitwirkende';
+// Fallback ohne WebGL oder wenn OpenFreeMap nicht erreichbar ist: OSM-Rasterkacheln (ebenfalls ohne Key).
+const JOBS_MAP_FALLBACK_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+const JOBS_MAP_FALLBACK_TILE_ATTRIBUTION =
+  '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>-Mitwirkende';
+const JOBS_MAP_MAX_ZOOM = 19;
 const MOBILE_MARKER_INITIAL_LIMIT = 20;
 const MOBILE_MARKER_POST_INTERACTION_LIMIT = 100;
 const FILTER_INPUT_DEBOUNCE_MS = 150;
@@ -43,6 +59,9 @@ let jobsMapInitialized = false;
 let hasActiveMapFilter = false;
 let jobsMapBootRetries = 0;
 let leafletLoader = null;
+let maplibreLoader = null;
+let jobsMapBaseLayer = null;
+let jobsMapUsesFallbackTiles = false;
 let jobsMapMarkerIcon = null;
 let jobsMapRenderFrame = null;
 let jobsMapInteractionFrame = null;
@@ -1327,14 +1346,14 @@ function observeJobListChanges() {
    MAP
 ========================= */
 
-function ensureLeafletCss() {
-  const existing = document.querySelector('link[data-jobs-map-leaflet-css="true"]');
+function ensureStylesheet(href, markerAttribute) {
+  const existing = document.querySelector(`link[${markerAttribute}="true"]`);
   if (existing) return;
 
   const link = document.createElement("link");
   link.rel = "stylesheet";
-  link.href = LEAFLET_CSS_URL;
-  link.setAttribute("data-jobs-map-leaflet-css", "true");
+  link.href = href;
+  link.setAttribute(markerAttribute, "true");
   document.head.appendChild(link);
 }
 
@@ -1371,7 +1390,7 @@ function ensureLeaflet() {
   if (typeof L !== "undefined") return Promise.resolve();
   if (leafletLoader) return leafletLoader;
 
-  ensureLeafletCss();
+  ensureStylesheet(LEAFLET_CSS_URL, "data-jobs-map-leaflet-css");
   leafletLoader = loadScript(LEAFLET_JS_URL).catch((error) => {
     console.error("[jobs-map] Leaflet load failed", error);
     throw error;
@@ -1380,14 +1399,38 @@ function ensureLeaflet() {
   return leafletLoader;
 }
 
-function getCustomMarkerIconUrl() {
+// Erst nach Leaflet laden: das Plugin haengt sich beim Ausfuehren an window.L.
+function ensureMaplibre() {
+  if (typeof L !== "undefined" && typeof L.maplibreGL === "function") {
+    return Promise.resolve();
+  }
+  if (maplibreLoader) return maplibreLoader;
+
+  ensureStylesheet(MAPLIBRE_CSS_URL, "data-jobs-map-maplibre-css");
+  maplibreLoader = loadScript(MAPLIBRE_JS_URL).then(() => loadScript(MAPLIBRE_LEAFLET_JS_URL));
+
+  return maplibreLoader;
+}
+
+function supportsWebGL() {
+  try {
+    const canvas = document.createElement("canvas");
+    const gl = canvas.getContext("webgl2") || canvas.getContext("webgl");
+    gl?.getExtension("WEBGL_lose_context")?.loseContext();
+    return Boolean(gl);
+  } catch (error) {
+    return false;
+  }
+}
+
+function getJobsMapSetting(datasetKey, globalKey) {
   const mapEl = document.getElementById("jobs-map");
 
-  return (
-    mapEl?.dataset.markerIconUrl ||
-    window.JOBS_MAP_MARKER_ICON_URL ||
-    ""
-  ).trim();
+  return String(mapEl?.dataset[datasetKey] || window[globalKey] || "").trim();
+}
+
+function getCustomMarkerIconUrl() {
+  return getJobsMapSetting("markerIconUrl", "JOBS_MAP_MARKER_ICON_URL");
 }
 
 function getJobsMapMarkerIcon() {
@@ -1425,17 +1468,116 @@ function initJobsMap() {
     tap: !isMobileViewport(),
     touchZoom: true,
     doubleClickZoom: !isMobileViewport(),
+    // Zoom 0 fuehrt bei maplibre-gl-leaflet zu Versatz zwischen Karte und Markern.
+    minZoom: 1,
+    maxZoom: JOBS_MAP_MAX_ZOOM,
   }).setView(JOBS_MAP_DEFAULT_CENTER, JOBS_MAP_DEFAULT_ZOOM);
-
-  L.tileLayer(JOBS_MAP_TILE_URL, {
-    subdomains: "abcd",
-    maxZoom: 20,
-    attribution: JOBS_MAP_TILE_ATTRIBUTION,
-  }).addTo(jobsMap);
 
   jobsMapMarkersLayer = L.layerGroup().addTo(jobsMap);
   jobsMapInitialized = true;
+  addJobsMapBaseLayer();
   return true;
+}
+
+// Reihenfolge: eigene Raster-URL (z. B. CARTO mit Key) > OpenFreeMap > OSM-Raster.
+// Die Marker haengen nicht am Hintergrund und erscheinen schon, waehrend MapLibre noch laedt.
+function addJobsMapBaseLayer() {
+  const customTileUrl = getJobsMapSetting("tileUrl", "JOBS_MAP_TILE_URL");
+  if (customTileUrl) {
+    jobsMapBaseLayer = L.tileLayer(customTileUrl, {
+      maxZoom: JOBS_MAP_MAX_ZOOM,
+      attribution:
+        getJobsMapSetting("tileAttribution", "JOBS_MAP_TILE_ATTRIBUTION") ||
+        JOBS_MAP_FALLBACK_TILE_ATTRIBUTION,
+    }).addTo(jobsMap);
+    return;
+  }
+
+  if (!supportsWebGL()) {
+    useJobsMapFallbackTiles("WebGL nicht verfuegbar");
+    return;
+  }
+
+  ensureMaplibre()
+    .then(addJobsMapVectorLayer)
+    .catch((error) => useJobsMapFallbackTiles(error));
+}
+
+function addJobsMapVectorLayer() {
+  const customStyleUrl = getJobsMapSetting("mapStyleUrl", "JOBS_MAP_STYLE_URL");
+  const layer = L.maplibreGL({
+    style: customStyleUrl || JOBS_MAP_STYLE_URL,
+    // Eigener Stil: Attribution kommt aus dessen Quellen.
+    attributionControl: customStyleUrl
+      ? undefined
+      : { customAttribution: JOBS_MAP_STYLE_ATTRIBUTION },
+  });
+
+  try {
+    layer.addTo(jobsMap);
+  } catch (error) {
+    // Scheitert MapLibre in onAdd, sind die move/zoom-Listener des Layers schon
+    // registriert und wuerden ab dann bei jeder Kartenbewegung werfen.
+    jobsMap.off(layer.getEvents(), layer);
+    try {
+      jobsMap.removeLayer(layer);
+    } catch (removeError) {
+      // onRemove erwartet eine fertige MapLibre-Instanz; der Container ist bereits entfernt.
+    }
+    throw error;
+  }
+
+  jobsMapBaseLayer = layer;
+
+  const glMap = layer.getMaplibreMap();
+  let styleLoaded = false;
+
+  glMap.on("style.load", () => {
+    styleLoaded = true;
+    localizeJobsMapLabels(glMap);
+  });
+
+  // Nur Fehler vor dem Laden des Stils (Stil/Server nicht erreichbar) loesen den
+  // Fallback aus; einzelne fehlende Kacheln danach ignorieren wir.
+  glMap.on("error", (event) => {
+    if (styleLoaded || jobsMapUsesFallbackTiles) return;
+
+    // Erst nach dem aktuellen MapLibre-Event abbauen.
+    window.setTimeout(() => useJobsMapFallbackTiles(event?.error || event), 0);
+  });
+}
+
+// Die OpenFreeMap-Stile beschriften mit name_en ("Munich", "Cologne").
+// Fuer die deutschen Jobseiten auf deutsche Namen umstellen, sonst Originalname.
+function localizeJobsMapLabels(glMap) {
+  const layers = glMap.getStyle()?.layers || [];
+
+  layers.forEach((layer) => {
+    const textField = layer.layout?.["text-field"];
+    if (!textField || !JSON.stringify(textField).includes("name")) return;
+
+    glMap.setLayoutProperty(layer.id, "text-field", [
+      "coalesce",
+      ["get", "name:de"],
+      ["get", "name"],
+    ]);
+  });
+}
+
+function useJobsMapFallbackTiles(reason) {
+  if (jobsMapUsesFallbackTiles || !jobsMap) return;
+  jobsMapUsesFallbackTiles = true;
+
+  console.warn("[jobs-map] Vektorkarte nicht verfuegbar, nutze OSM-Rasterkacheln", reason);
+
+  if (jobsMapBaseLayer) {
+    jobsMap.removeLayer(jobsMapBaseLayer);
+  }
+
+  jobsMapBaseLayer = L.tileLayer(JOBS_MAP_FALLBACK_TILE_URL, {
+    maxZoom: JOBS_MAP_MAX_ZOOM,
+    attribution: JOBS_MAP_FALLBACK_TILE_ATTRIBUTION,
+  }).addTo(jobsMap);
 }
 
 function getJobItemUrl(row) {

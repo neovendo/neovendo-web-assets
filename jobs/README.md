@@ -9,7 +9,7 @@
 - Umkreissuche ueber `latitude`/`longitude`
 - Filter nach Vermittlungsart
 - Ergebniszaehler und "Mehr laden"
-- Leaflet-Karte mit Markern fuer sichtbare Jobs
+- Leaflet-Karte mit Markern fuer sichtbare Jobs (Kartenhintergrund ohne API-Key, siehe [Karte](#karte))
 - eigenen Empty State bei `0` Treffern
 
 `jobs-filter.css` liefert die Minimalstile fuer:
@@ -126,17 +126,27 @@ Wenn `data-url` fehlt, sucht das Script als Fallback:
 - erstes `a[href]` im Job-Item
 - sonst `.job-link[href]`
 
-## Optionales `data-*`-Attribut auf der Karte
+## Optionale `data-*`-Attribute auf der Karte
 
 Auf `#jobs-map` kann gesetzt werden:
 
-- `data-marker-icon-url`
+- `data-marker-icon-url` – eigenes Marker-Icon
+- `data-map-style-url` – anderer MapLibre-Stil statt OpenFreeMap Liberty,
+  z. B. `https://tiles.openfreemap.org/styles/positron` (heller/grauer) oder
+  `https://tiles.openfreemap.org/styles/bright`
+- `data-tile-url` – eigene Rasterkacheln statt der Vektorkarte
+  (z. B. CARTO mit eigenem API-Key)
+- `data-tile-attribution` – Quellenangabe zu `data-tile-url`
+  (Standard: OpenStreetMap-Mitwirkende)
 
 Alternativ kann global gesetzt werden:
 
 ```html
 <script>
   window.JOBS_MAP_MARKER_ICON_URL = "https://example.com/pin.svg";
+  window.JOBS_MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/positron";
+  window.JOBS_MAP_TILE_URL = "https://example.com/tiles/{z}/{x}/{y}.png";
+  window.JOBS_MAP_TILE_ATTRIBUTION = "&copy; Beispiel";
 </script>
 ```
 
@@ -172,12 +182,33 @@ Beispiel:
   - `Enter`
   - `Escape`
 
-## Leaflet
+## Karte
 
 Leaflet wird dynamisch geladen:
 
 - JS: `https://unpkg.com/leaflet@1.9.4/dist/leaflet.js`
 - CSS: `https://unpkg.com/leaflet@1.9.4/dist/leaflet.css`
+
+Kartenhintergrund (alle Varianten ohne API-Key):
+
+1. **OpenFreeMap** (Standard): Vektorkarte im Stil `liberty`
+   (`https://tiles.openfreemap.org/styles/liberty`), kostenlos, ohne Registrierung
+   und ohne Abrufgrenze, auch kommerziell nutzbar. Gerendert wird sie mit
+   MapLibre GL, das ueber `maplibre-gl-leaflet` als Leaflet-Layer eingebunden ist.
+   Beides wird nur geladen, wenn `#jobs-map` existiert:
+   - `https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js` (+ `.css`)
+   - `https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js`
+
+   Die Beschriftung wird auf deutsche Namen umgestellt (`name:de`, sonst `name`),
+   sonst stuenden dort englische Namen wie „Munich“.
+2. **OpenStreetMap-Rasterkacheln** (`tile.openstreetmap.org`) als automatischer
+   Fallback, wenn der Browser kein WebGL kann, MapLibre nicht laedt oder der
+   OpenFreeMap-Stil nicht erreichbar ist.
+
+Frueher kamen die Kacheln von CARTO (`basemaps.cartocdn.com`). CARTO verlangt dafuer
+seit Ende August 2026 einen API-Key und liefert ohne Key Kacheln mit dem
+Wasserzeichen „API KEY REQUIRED“. Wer CARTO mit eigenem Key nutzen will, setzt
+`data-tile-url` (siehe oben).
 
 ## Hinweise
 
