@@ -78,6 +78,6 @@ Embeds entfernt werden (nur den `<script>`-Block, `<style>` und Markup bleiben).
 
 - Safari < 14.1 kann `input.files` nicht setzen. Dort bleibt das native
   Verhalten (letzte Auswahl gewinnt), die Liste zeigt die Dateien ohne "x".
-- Das Formular „Initiativbewerbung" hat kein `data-submit-with-attachments="true"`
-  und geht deshalb nicht ueber `submit.php`, sondern ueber den normalen
-  Webflow-Versand (Links in `anlagen_file_url`).
+- Alle drei Formulare tragen `data-submit-with-attachments="true"` und gehen
+  ueber `submit.php`. Fehlt das Attribut, geht das Formular stattdessen ueber
+  den normalen Webflow-Versand (nur Links in `anlagen_file_url`).
