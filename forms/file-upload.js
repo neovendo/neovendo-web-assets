@@ -6,15 +6,21 @@
 // stattdessen, uebernimmt Drag & Drop, zeigt jede Datei mit einem "x" zum
 // Entfernen und schreibt die gesammelte Liste zurueck in input.files.
 //
-// Hochgeladen wird weiterhin von webflow-upload.js (files.die-jobschmiede.com).
-// Es liest input.files erst beim Absenden. Die Grenzen unten muessen zu den
-// Werten dort passen, sonst lehnt der Upload ab, was hier angenommen wurde.
+// Hochgeladen wird weiterhin von webflow-upload.js aus dem form-submit-addon.
+// Es liest input.files erst beim Absenden.
 (function () {
   "use strict";
 
-  const MAX_FILES = 3;
-  const MAX_FILE_SIZE = 10 * 1024 * 1024;
-  const ALLOWED_EXTENSIONS = ["pdf", "doc", "docx"];
+  // Gelten, solange am Upload-Feld nichts anderes steht. Sonst kommen die
+  // Grenzen aus data-max-files, data-max-file-size-mb und
+  // data-allowed-extensions am Input oder einem Eltern-Element (meist
+  // .file-upload-wrap). webflow-upload.js liest dieselben Attribute,
+  // upload.php prueft zusaetzlich gegen seine config.php.
+  const DEFAULT_CONFIG = {
+    maxFiles: 3,
+    maxFileSizeMb: 10,
+    allowedExtensions: ["pdf", "doc", "docx"],
+  };
 
   const SELECTORS = {
     wrap: ".file-upload-wrap",
@@ -31,11 +37,13 @@
     "</svg>";
 
   // Nur die neuen Teile (Zeilen mit "x", Fehlermeldung, Fokus). Das Grund-Design
-  // des Feldes steht im Embed und bleibt dort in Webflow pflegbar.
+  // des Feldes steht im Embed und bleibt dort in Webflow pflegbar. Farben lassen
+  // sich pro Seite ueber die --file-upload-*-Variablen setzen, die Standardwerte
+  // passen zum Jobschmiede-Embed.
   const STYLES = `
     .file-upload-box:has(.file-upload-input:focus-visible) {
-      border-color: #f0a63a;
-      outline: 2px solid #f0a63a;
+      border-color: var(--file-upload-accent, #f0a63a);
+      outline: 2px solid var(--file-upload-accent, #f0a63a);
       outline-offset: 2px;
     }
     .file-upload-wrap .file-upload-item {
@@ -53,7 +61,7 @@
     .file-upload-item-size {
       flex: none;
       font-size: 0.82rem;
-      color: #7a746a;
+      color: var(--file-upload-muted, #7a746a);
     }
     .file-upload-wrap .file-upload-remove {
       flex: none;
@@ -66,15 +74,15 @@
       border: 0;
       border-radius: 999px;
       background: transparent;
-      color: #4e4a43;
+      color: var(--file-upload-icon, #4e4a43);
       cursor: pointer;
     }
     .file-upload-wrap .file-upload-remove:hover {
-      background: #f6f1e8;
-      color: #1f1f1f;
+      background: var(--file-upload-hover-bg, #f6f1e8);
+      color: var(--file-upload-text, #1f1f1f);
     }
     .file-upload-wrap .file-upload-remove:focus-visible {
-      outline: 2px solid #f0a63a;
+      outline: 2px solid var(--file-upload-accent, #f0a63a);
       outline-offset: 1px;
     }
     .file-upload-remove svg {
@@ -86,7 +94,7 @@
       gap: 0.25rem;
       font-size: 0.85rem;
       line-height: 1.4;
-      color: #b42318;
+      color: var(--file-upload-error, #b42318);
     }
     .file-upload-error[hidden] {
       display: none;
@@ -117,13 +125,40 @@
     return parts.length > 1 ? parts.pop().toLowerCase() : "";
   }
 
-  function validateFile(file) {
-    if (!ALLOWED_EXTENSIONS.includes(getExtension(file.name))) {
-      return `„${file.name}“ wurde nicht hinzugefügt: Erlaubt sind nur PDF, DOC oder DOCX.`;
+  function readConfig(input) {
+    const read = (name) => input.closest(`[${name}]`)?.getAttribute(name) || "";
+
+    const maxFiles = parseInt(read("data-max-files"), 10);
+    const maxFileSizeMb = parseFloat(read("data-max-file-size-mb").replace(",", "."));
+    const allowedExtensions = read("data-allowed-extensions")
+      .split(",")
+      .map((extension) => extension.trim().toLowerCase().replace(/^\./, ""))
+      .filter(Boolean);
+
+    return {
+      maxFiles: maxFiles > 0 ? maxFiles : DEFAULT_CONFIG.maxFiles,
+      maxFileSizeMb: maxFileSizeMb > 0 ? maxFileSizeMb : DEFAULT_CONFIG.maxFileSizeMb,
+      allowedExtensions: allowedExtensions.length
+        ? allowedExtensions
+        : DEFAULT_CONFIG.allowedExtensions,
+    };
+  }
+
+  // ["pdf", "doc", "docx"] -> "PDF, DOC oder DOCX"
+  function describeExtensions(extensions) {
+    const names = extensions.map((extension) => extension.toUpperCase());
+    if (names.length === 1) return names[0];
+    return `${names.slice(0, -1).join(", ")} oder ${names[names.length - 1]}`;
+  }
+
+  function validateFile(file, config) {
+    if (!config.allowedExtensions.includes(getExtension(file.name))) {
+      return `„${file.name}“ wurde nicht hinzugefügt: Erlaubt sind nur ${describeExtensions(config.allowedExtensions)}.`;
     }
 
-    if (file.size > MAX_FILE_SIZE) {
-      return `„${file.name}“ wurde nicht hinzugefügt: Die Datei ist größer als 10 MB.`;
+    if (file.size > config.maxFileSizeMb * 1024 * 1024) {
+      const limit = String(config.maxFileSizeMb).replace(".", ",");
+      return `„${file.name}“ wurde nicht hinzugefügt: Die Datei ist größer als ${limit} MB.`;
     }
 
     return "";
@@ -220,6 +255,7 @@
       return false;
     }
 
+    const config = readConfig(input);
     const errorElement = getErrorElement(wrap, list);
 
     function showProblems(problems) {
@@ -244,15 +280,17 @@
       incoming.forEach((file) => {
         if (files.some((known) => isSameFile(known, file))) return;
 
-        const problem = validateFile(file);
+        const problem = validateFile(file, config);
         if (problem) {
           problems.push(problem);
           return;
         }
 
-        if (files.length >= MAX_FILES) {
+        if (files.length >= config.maxFiles) {
           problems.push(
-            `„${file.name}“ wurde nicht hinzugefügt: Es sind maximal ${MAX_FILES} Dateien möglich.`
+            config.maxFiles === 1
+              ? `„${file.name}“ wurde nicht hinzugefügt: Es ist nur eine Datei möglich.`
+              : `„${file.name}“ wurde nicht hinzugefügt: Es sind maximal ${config.maxFiles} Dateien möglich.`
           );
           return;
         }
