@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>neovendo-consent – Demo</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/dist/neovendo-consent.css" />
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #1d2327;
+        --muted: #5b6670;
+        --line: #e3e8ec;
+        --paper: #f7f9fa;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font: 16px/1.55 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      }
+      main,
+      header,
+      footer {
+        max-width: 60rem;
+        margin: 0 auto;
+        padding-inline: 1.25rem;
+      }
+      header {
+        padding-block: 2.5rem 1rem;
+      }
+      h1 {
+        margin: 0;
+        font-size: 1.75rem;
+      }
+      h2 {
+        margin: 0 0 0.75rem;
+        font-size: 1.15rem;
+      }
+      p {
+        margin: 0 0 1rem;
+        color: var(--muted);
+      }
+      section {
+        margin-block: 1.5rem;
+        padding: 1.25rem;
+        border: 1px solid var(--line);
+        border-radius: 0.75rem;
+        background: #fff;
+      }
+      code {
+        font-size: 0.9em;
+      }
+      .map {
+        height: 20rem;
+        border-radius: 0.5rem;
+        overflow: hidden;
+      }
+      .badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+        align-items: center;
+      }
+      .badge {
+        display: grid;
+        place-items: center;
+        min-width: 10rem;
+        min-height: 4.5rem;
+        border: 1px solid var(--line);
+        border-radius: 0.5rem;
+        color: var(--muted);
+        font-size: 0.85rem;
+        text-decoration: none;
+      }
+      .google-widget {
+        min-width: 14rem;
+        min-height: 4.5rem;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+      }
+      .actions button {
+        padding: 0.5rem 0.9rem;
+        border: 1px solid var(--line);
+        border-radius: 0.4rem;
+        background: var(--paper);
+        color: var(--ink);
+        font: inherit;
+        font-size: 0.9rem;
+        cursor: pointer;
+      }
+      pre {
+        overflow-x: auto;
+        margin: 0 0 1rem;
+        padding: 0.75rem;
+        border-radius: 0.5rem;
+        background: var(--paper);
+        font-size: 0.8rem;
+      }
+      footer {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.25rem;
+        padding-block: 1rem 3rem;
+        font-size: 0.9rem;
+      }
+      footer a {
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>neovendo-consent</h1>
+      <p>Demo mit der Konfiguration von die-jobschmiede.com. Karte und Bewertungs-Badge laden erst nach Einwilligung.</p>
+    </header>
+
+    <main>
+      <section>
+        <h2>Standort Reinfeld</h2>
+        <p>Kartenhintergrund von OpenFreeMap, gerendert mit MapLibre aus dem eigenen <code>node_modules</code>.</p>
+        <div id="map" class="map" data-consent-placeholder data-service="openfreemap"></div>
+        <script type="text/plain" data-category="external_media" data-service="openfreemap">
+          (function () {
+            var css = document.createElement('link');
+            css.rel = 'stylesheet';
+            css.href = '/node_modules/maplibre-gl/dist/maplibre-gl.css';
+            document.head.appendChild(css);
+            import('/node_modules/maplibre-gl/dist/maplibre-gl.mjs').then(function (maplibregl) {
+              var map = new maplibregl.Map({
+                container: 'map',
+                style: 'https://tiles.openfreemap.org/styles/liberty',
+                center: [10.49613, 53.82982],
+                zoom: 13,
+              });
+              new maplibregl.Marker().setLngLat([10.49613, 53.82982]).addTo(map);
+            });
+          })();
+        </script>
+      </section>
+
+      <section>
+        <h2>Bewertungen</h2>
+        <p>Wie auf <code>/arbeitnehmer/faq-arbeitnehmer</code>: Das Elfsight-Badge steckt in einem Link zu Google. Der Platzhalter folgt dem Link nicht.</p>
+        <div class="badges">
+          <span class="badge">GVP-Logo</span>
+          <a href="https://www.google.com/search?q=Die+Jobschmiede+GmbH+Rezensionen" target="_blank" rel="noopener">
+            <div class="google-widget">
+              <script type="text/plain" data-category="external_media" data-service="elfsight" data-src="https://elfsightcdn.com/platform.js" async></script>
+              <div class="elfsight-app-75c2c62c-b5ca-4f5a-9bfb-6ba31df0696d" data-elfsight-app-lazy data-consent-placeholder="compact" data-service="elfsight"></div>
+            </div>
+          </a>
+          <span class="badge">kununu</span>
+        </div>
+      </section>
+
+      <section>
+        <h2>Stand der Einwilligung</h2>
+        <div class="actions">
+          <button type="button" onclick="neovendoConsent.show()">Datenschutz-Einstellungen</button>
+          <button type="button" onclick="neovendoConsent.showBanner()">Banner zeigen</button>
+          <button type="button" onclick="neovendoConsent.reset()">Entscheidung löschen</button>
+        </div>
+        <pre id="state">Noch keine Entscheidung.</pre>
+        <h2>Nachweise am Demo-Server</h2>
+        <pre id="proofs">[]</pre>
+      </section>
+    </main>
+
+    <footer>
+      <a href="/datenschutz">Datenschutzerklärung</a>
+      <a href="/impressum">Impressum</a>
+      <a href="#" data-cc="show-preferencesModal">Datenschutz-Einstellungen</a>
+    </footer>
+
+    <script type="module">
+      import { initConsent } from '/dist/neovendo-consent.mjs';
+      import config from './jobschmiede.config.mjs';
+
+      const stateView = document.getElementById('state');
+      const proofView = document.getElementById('proofs');
+      const showState = (state) => {
+        stateView.textContent = state ? JSON.stringify(state, null, 2) : 'Noch keine Entscheidung.';
+      };
+      const showProofs = async () => {
+        const proofs = await fetch('/api/consent').then((response) => response.json());
+        proofView.textContent = JSON.stringify(proofs, null, 2);
+      };
+
+      // Nur für die Demo: Der eingebaute Browser meldet sich als automatisiert, das Banner bliebe sonst aus.
+      const consent = initConsent({ ...config, hideFromBots: false });
+      consent.on('ready', ({ state }) => showState(state));
+      consent.on('change', ({ state }) => showState(state));
+      consent.on('proof', showProofs);
+      showProofs();
+    </script>
+  </body>
+</html>
